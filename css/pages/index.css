@@ -1,0 +1,55 @@
+/* Lá Chắn Số · file CSS dùng chung. Màu lấy từ css/theme.css */
+.home{max-width:1180px;margin:0 auto;padding:28px 34px 56px}
+.home-hero{position:relative;overflow:hidden;isolation:isolate;border-radius:26px;background:linear-gradient(140deg,var(--lcs-blue) 0%,var(--lcs-blue-dark) 55%,var(--lcs-blue-deep) 100%);color:var(--lcs-white);padding:44px 44px 40px;display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:30px;align-items:center}
+.home-hero:before{content:"";position:absolute;inset:auto -120px -200px auto;width:520px;height:420px;background:radial-gradient(ellipse,#1f6fc477 0%,transparent 65%);z-index:-1}
+.home-hero h1{font-size:clamp(30px,4vw,48px);line-height:1.12;letter-spacing:-.5px;margin:16px 0 14px;font-weight:700}
+.home-hero h1 em{font-style:normal;color:var(--lcs-yellow)}
+.home-hero p{color:var(--lcs-blue-mist);font-size:16px;line-height:1.7;margin:0;max-width:560px}
+.hero-cta{display:flex;flex-wrap:wrap;gap:12px;margin-top:26px}
+.btn-star{background:var(--lcs-yellow);color:var(--lcs-blue-deep);box-shadow:0 8px 20px color-mix(in srgb,var(--lcs-blue-deep) 28%,transparent)}
+.btn-star:hover{background:var(--lcs-yellow-hover)}
+.btn-onblue{background:transparent;color:var(--lcs-white);border-color:#ffffff55}
+.btn-onblue:hover{background:#ffffff14}
+.hero-card{background:#ffffff14;border:1px solid #ffffff2b;border-radius:20px;padding:22px}
+.hero-card h2{font-size:15px;margin:0 0 14px;color:var(--lcs-white);text-transform:uppercase;letter-spacing:.6px}
+.three-no{list-style:none;margin:0;padding:0;display:grid;gap:12px}
+.three-no li{display:flex;gap:12px;align-items:center;font-weight:650;font-size:15px}
+.three-no span{display:grid;place-items:center;width:34px;height:34px;border-radius:10px;background:var(--lcs-yellow);color:var(--lcs-blue-deep);font-weight:800;flex-shrink:0}
+.home-section{margin-top:36px}
+.home-section-head{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:14px}
+.home-section-head h2{font-size:22px;margin:0;color:var(--lcs-ink)}
+.home-section-head p{margin:4px 0 0;color:var(--lcs-muted);font-size:14px}
+.feature-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+.feature-grid.two{grid-template-columns:repeat(2,minmax(0,1fr))}
+.feature{position:relative;display:flex;flex-direction:column;gap:8px;text-decoration:none;color:var(--lcs-ink);background:var(--lcs-white);border:1.5px solid var(--lcs-line);border-radius:18px;padding:18px;min-height:168px;transition:border-color .15s,box-shadow .15s,transform .15s}
+.feature:hover{border-color:var(--lcs-blue);box-shadow:0 10px 28px color-mix(in srgb,var(--lcs-blue) 12%,transparent);transform:translateY(-2px)}
+.feature .f-icon{display:grid;place-items:center;width:46px;height:46px;border-radius:14px;background:var(--lcs-blue-soft);color:var(--lcs-blue)}
+.feature .f-icon .ic{width:24px;height:24px}
+.feature .f-code{position:absolute;top:16px;right:16px;font-size:11px;font-weight:800;color:var(--lcs-subtle);letter-spacing:.6px}
+.feature strong{font-family:"Bai Jamjuree","Be Vietnam Pro",sans-serif;font-size:17px;line-height:1.3}
+.feature small{color:var(--lcs-muted);font-size:14px;line-height:1.55}
+.feature .go{margin-top:auto;display:inline-flex;align-items:center;gap:6px;font-size:14px;font-weight:750;color:var(--lcs-blue)}
+.feature .go .ic{width:16px;height:16px}
+.feature.primary{background:var(--lcs-blue);border-color:var(--lcs-blue);color:var(--lcs-white)}
+.feature.primary .f-icon{background:#ffffff1f;color:var(--lcs-yellow)}.feature.primary small{color:var(--lcs-blue-mist)}.feature.primary .go{color:var(--lcs-yellow)}.feature.primary .f-code{color:var(--lcs-blue-mist)}
+.feature.danger .f-icon{background:var(--lcs-red-soft);color:var(--lcs-red)}
+.feature.soon{border-style:dashed}
+.feature.staff .f-icon{background:var(--lcs-blue-deep);color:var(--lcs-yellow)}
+.soon-pill{display:inline-flex;align-self:flex-start;align-items:center;gap:6px;font-size:12px;font-weight:750;color:var(--lcs-amber-dark);background:var(--lcs-amber-soft);border:1px solid var(--lcs-amber-line);border-radius:100px;padding:3px 10px}
+.progress-note[hidden]{display:none}.progress-note{display:inline-flex;gap:8px;align-items:center;font-size:13px;font-weight:700;color:var(--lcs-green-dark);background:var(--lcs-green-soft);border:1px solid var(--lcs-green-line);border-radius:100px;padding:6px 12px}
+.lookup-link{display:inline-flex;align-items:center;gap:8px;font-size:14px;font-weight:750;color:var(--lcs-blue-dark);background:var(--lcs-white);border:1.5px solid var(--lcs-blue-line);border-radius:100px;padding:9px 16px;text-decoration:none;white-space:nowrap}.lookup-link:hover{border-color:var(--lcs-blue);background:var(--lcs-blue-softer)}.lookup-link .ic{width:16px;height:16px}
+.home-foot{margin-top:36px;padding:18px 20px;border-radius:16px;background:var(--lcs-white);border:1px solid var(--lcs-line);display:flex;gap:12px;align-items:flex-start;color:var(--lcs-muted);font-size:14px;line-height:1.6}
+.home-foot .ic{color:var(--lcs-blue);margin-top:2px}
+.home-foot strong{color:var(--lcs-ink)}
+.stub{max-width:760px;margin:0 auto;padding:36px 24px 60px}
+.stub .form-card{padding:34px}
+.stub h1{font-size:30px;margin:14px 0 10px;color:var(--lcs-ink)}
+.stub p{color:var(--lcs-muted);font-size:15px;line-height:1.7}
+.stub ul{color:var(--lcs-text-2);font-size:15px;line-height:1.8;padding-left:20px}
+@media(max-width:1100px){.feature-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.home-hero{grid-template-columns:1fr}}
+@media(max-width:620px){.home{padding:14px 14px 40px}.home-hero{padding:24px 20px;border-radius:20px}.feature-grid,.feature-grid.two{grid-template-columns:1fr}.feature{min-height:0}.hero-cta .btn{width:100%}.home-section-head{flex-direction:column;align-items:flex-start}.stub{padding:16px 14px 40px}.stub .form-card{padding:22px 18px}}
+html.lcs-narrow .feature-grid,html.lcs-narrow .feature-grid.two{grid-template-columns:1fr}
+html.lcs-narrow .home-hero{grid-template-columns:1fr;padding:24px 20px}
+html.lcs-narrow .home{padding:14px 14px 40px}
+html.lcs-compact .feature-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+html.lcs-compact .home-hero{grid-template-columns:1fr}

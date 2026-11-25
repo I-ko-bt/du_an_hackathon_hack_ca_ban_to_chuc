@@ -1,0 +1,2 @@
+/* Lá Chắn Số · file CSS dùng chung. Màu lấy từ css/theme.css */
+.size-opt{min-width:120px}.size-opt[aria-pressed=true]{border-width:2px;font-weight:800}.size-opt[aria-pressed=true]:hover:not(:disabled){background:var(--lcs-line);color:var(--lcs-blue-dark);border-color:var(--primary)}.size-opt .icon{width:18px;height:18px}

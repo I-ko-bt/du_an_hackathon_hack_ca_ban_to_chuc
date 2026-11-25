@@ -1,0 +1,9 @@
+/* Lá Chắn Số · file CSS dùng chung. Màu lấy từ css/theme.css */
+/* Nhận diện Đoàn + phần nối hệ thống Lá Chắn Số */
+h1,h2,h3,.eyebrow,.label{font-family:"Bai Jamjuree","Be Vietnam Pro",system-ui,sans-serif}
+aside .brand,.topbar .brand{display:none!important}
+.login{min-height:calc(100vh - 84px)}
+aside{top:0}
+a.btn.primary{color:var(--lcs-white)}
+.gate-note{padding:12px 14px;border-radius:12px;background:var(--lcs-red-soft);border:1px solid var(--lcs-red-line);color:var(--lcs-red-dark);font-size:14px}
+.gate-links{display:flex;gap:10px;flex-wrap:wrap}

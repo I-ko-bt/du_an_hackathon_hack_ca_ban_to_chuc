@@ -1,0 +1,15 @@
+/* Lá Chắn Số · file CSS dùng chung. Màu lấy từ css/theme.css */
+/* Nhận diện Đoàn + phần nối hệ thống Lá Chắn Số */
+h1,h2,h3,.eyebrow,.label{font-family:"Bai Jamjuree","Be Vietnam Pro",system-ui,sans-serif}
+.f12-bar{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+.f12-bar strong{display:block;font-family:"Bai Jamjuree","Be Vietnam Pro",sans-serif;font-size:18px;color:var(--lcs-blue-deep)}
+.f12-bar .eyebrow{margin:0}
+.btnlink{display:inline-flex;align-items:center;justify-content:center;min-height:48px;border:1px solid transparent;border-radius:12px;padding:10px 16px;font-weight:650;text-decoration:none}
+.btnlink.full{display:flex;width:100%}
+.btnlink.secondary{border-color:var(--line)}
+.actions.decide{display:grid;grid-template-columns:1fr 1fr;gap:10px}.actions.decide button{width:100%}button.reject{background:var(--lcs-white);color:var(--lcs-red-mid);border-color:var(--lcs-red-light)}button.reject:hover{background:var(--lcs-red-soft)}.status.rejected{background:var(--lcs-red-soft);color:var(--lcs-red-dark)}.metric.rejected{border-top-color:var(--lcs-red)}.metrics{grid-template-columns:repeat(5,minmax(0,1fr))!important}@media(max-width:700px){.metrics{grid-template-columns:repeat(2,minmax(0,1fr))!important}.actions.decide{grid-template-columns:1fr}}
+.who{display:block;margin-top:4px;font-size:13px;font-weight:600;color:var(--lcs-slate)}.who.anon{color:var(--lcs-slate-2);font-style:italic}.src-f02{display:inline-block;margin-top:4px;font-size:12px;font-weight:700;color:var(--lcs-green-dark);background:var(--lcs-green-soft);border-radius:6px;padding:1px 7px}
+.login a{color:var(--primary)}
+h1:focus{outline:none}
+.login .btnlink.primary{color:var(--lcs-white)}
+@media(max-width:700px){.f12-bar{display:block}.f12-bar #account{margin-top:8px}#account span{display:inline}}

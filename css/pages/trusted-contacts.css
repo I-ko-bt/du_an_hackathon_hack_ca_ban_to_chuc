@@ -1,0 +1,56 @@
+/* Lá Chắn Số · file CSS dùng chung. Màu lấy từ css/theme.css */
+.acct-wrap{max-width:720px;margin:0 auto;padding:30px 24px 60px}
+.acct-card{background:var(--lcs-white);border:1px solid var(--lcs-line);border-radius:22px;padding:30px;box-shadow:0 10px 30px color-mix(in srgb,var(--lcs-blue-deep) 6%,transparent)}
+.acct-card h1{font-size:28px;margin:8px 0 6px;color:var(--lcs-ink)}
+.acct-card .lead{color:var(--lcs-muted);margin:0 0 18px;line-height:1.65}
+.acct-eyebrow{font-size:12px;font-weight:800;letter-spacing:.8px;text-transform:uppercase;color:var(--lcs-blue)}
+.tabs{display:grid;grid-template-columns:1fr 1fr;gap:4px;background:var(--lcs-surface-2);border-radius:14px;padding:4px;margin:6px 0 20px}
+.tabs button{appearance:none;border:0;background:transparent;border-radius:11px;min-height:46px;font:inherit;font-weight:750;color:var(--lcs-text-2);cursor:pointer}
+.tabs button[aria-selected="true"]{background:var(--lcs-white);color:var(--lcs-blue-dark);box-shadow:0 2px 8px color-mix(in srgb,var(--lcs-blue-deep) 10%,transparent)}
+.tabs button:focus-visible,.link-btn:focus-visible{outline:3px solid var(--lcs-focus);outline-offset:2px}
+.acct-form{display:grid;gap:14px}
+.acct-form .field{margin:0}
+.acct-form label{display:block;font-weight:700;font-size:14px;margin-bottom:6px;color:var(--lcs-ink)}
+.acct-form .hint{display:block;font-size:13px;color:var(--lcs-subtle);margin-top:5px}
+.acct-form .err{display:block;font-size:13px;color:var(--lcs-red-mid);font-weight:600;margin-top:5px}
+.acct-form .input[aria-invalid="true"]{border-color:var(--lcs-red)}
+.acct-form .btn{width:100%;justify-content:center}
+.show-pw{display:flex;align-items:center;gap:8px;font-size:14px;color:var(--lcs-text-2);font-weight:500!important}
+.show-pw input{width:18px;height:18px;accent-color:var(--lcs-blue)}
+.form-alert{padding:12px 14px;border-radius:12px;background:var(--lcs-red-soft);border:1px solid var(--lcs-red-line);color:var(--lcs-red-dark);font-size:14px;font-weight:600}
+.form-ok{padding:12px 14px;border-radius:12px;background:var(--lcs-green-soft);border:1px solid var(--lcs-green-line);color:var(--lcs-green-dark);font-size:14px;font-weight:600}
+.demo-box{margin-top:18px;border:1.5px dashed var(--lcs-amber-line);background:var(--lcs-amber-soft);border-radius:16px;padding:14px 16px;color:var(--lcs-amber-deep);font-size:14px;line-height:1.6}
+.demo-box summary{cursor:pointer;font-weight:800;color:var(--lcs-amber-dark)}
+.demo-box code{background:var(--lcs-white);border:1px solid var(--lcs-amber-line);border-radius:6px;padding:1px 6px;font-size:13px}
+.demo-box ul{margin:8px 0;padding-left:20px}
+.demo-fill{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.demo-fill button{appearance:none;font:inherit;font-size:13px;font-weight:700;border:1px solid var(--lcs-amber-line);background:var(--lcs-white);color:var(--lcs-amber-dark);border-radius:100px;padding:8px 12px;cursor:pointer;min-height:40px}
+.notice-local{display:flex;gap:10px;align-items:flex-start;margin-top:18px;font-size:13px;color:var(--lcs-muted);line-height:1.6;background:var(--lcs-blue-softer);border:1px solid var(--lcs-line);border-radius:14px;padding:12px 14px}
+.notice-local .ic{color:var(--lcs-blue);flex-shrink:0;margin-top:2px}
+.profile{display:flex;gap:14px;align-items:center;margin:4px 0 18px}
+.profile .av{display:grid;place-items:center;width:58px;height:58px;border-radius:18px;background:var(--lcs-blue);color:var(--lcs-yellow);font-family:"Bai Jamjuree",sans-serif;font-size:24px;font-weight:700;flex-shrink:0}
+.profile strong{display:block;font-size:20px;color:var(--lcs-ink);font-family:"Bai Jamjuree","Be Vietnam Pro",sans-serif}
+.role-pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:800;border-radius:100px;padding:3px 10px;background:var(--lcs-blue-soft);color:var(--lcs-blue-dark);border:1px solid var(--lcs-blue-line)}
+.role-pill.staff{background:var(--lcs-blue-deep);color:var(--lcs-yellow);border-color:var(--lcs-blue-deep)}
+.link-btn{appearance:none;border:0;background:none;font:inherit;color:var(--lcs-blue);font-weight:700;cursor:pointer;padding:8px 0;min-height:44px;text-decoration:underline}
+.acct-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px}
+.contact-list{list-style:none;margin:0 0 18px;padding:0;display:grid;gap:10px}
+.contact-row{display:flex;gap:12px;align-items:center;border:1px solid var(--lcs-line);border-radius:16px;padding:12px 14px;background:var(--lcs-white)}
+.contact-row .av{display:grid;place-items:center;width:44px;height:44px;border-radius:14px;background:var(--lcs-blue-soft);color:var(--lcs-blue);flex-shrink:0}
+.contact-row .who{flex:1;min-width:0}
+.contact-row .who strong{display:block;color:var(--lcs-ink);overflow-wrap:anywhere}
+.contact-row .who small{color:var(--lcs-subtle);font-size:13px}
+.contact-row .pref{display:inline-block;margin-left:6px;font-size:11px;font-weight:800;color:var(--lcs-green-dark);background:var(--lcs-green-soft);border-radius:6px;padding:1px 7px;vertical-align:middle}
+.row-acts{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.row-acts a,.row-acts button{appearance:none;font:inherit;font-size:13px;font-weight:700;display:inline-flex;align-items:center;gap:5px;min-height:40px;padding:8px 12px;border-radius:100px;border:1px solid var(--lcs-line-strong);background:var(--lcs-white);color:var(--lcs-blue-dark);text-decoration:none;cursor:pointer;white-space:nowrap}
+.row-acts a.call{background:var(--lcs-green);border-color:var(--lcs-green);color:var(--lcs-white)}
+.row-acts button.danger{color:var(--lcs-red-mid);border-color:var(--lcs-red-line)}
+.row-acts button.danger.armed{background:var(--lcs-red);color:var(--lcs-white);border-color:var(--lcs-red)}
+.row-acts .ic{width:15px;height:15px}
+.add-box{border-top:1px solid var(--lcs-line);padding-top:18px;margin-top:6px}
+.add-box h2{font-size:18px;margin:0 0 12px}
+.empty-c{text-align:center;padding:22px 12px;border:1.5px dashed var(--lcs-line-strong);border-radius:16px;color:var(--lcs-muted);margin-bottom:18px}
+.empty-c strong{display:block;color:var(--lcs-ink);font-size:17px;margin-bottom:4px}
+.feature-grid.two{margin-top:6px}
+@media(max-width:620px){.acct-wrap{padding:14px 12px 40px}.acct-card{padding:22px 16px;border-radius:18px}.contact-row{flex-wrap:wrap}.row-acts{width:100%;justify-content:flex-start}}
+html.lcs-narrow .acct-wrap{padding:14px 12px 40px}html.lcs-narrow .acct-card{padding:22px 16px}html.lcs-narrow .contact-row{flex-wrap:wrap}html.lcs-narrow .row-acts{width:100%;justify-content:flex-start}
