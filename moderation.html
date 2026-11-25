@@ -1,0 +1,308 @@
+<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#00539c" /><link rel="icon" type="image/svg+xml" href="favicon.svg" /><title>Lá Chắn Số | Tiếp nhận và kiểm duyệt</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@500;600;700&family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<!-- LCS cỡ chữ (dùng chung mọi trang): áp dụng trước khi vẽ trang để không bị nháy -->
+<script>(function(){var L=[0.9,1,1.15,1.3],i=1;try{var k=L.indexOf(parseFloat(localStorage.getItem("lcs_font_scale")));if(k>=0)i=k}catch(e){}window.__lcsFont={L:L,i:i};document.documentElement.style.zoom=L[i];})();</script><link rel="stylesheet" href="css/theme.css"><link rel="stylesheet" href="css/pages/moderation.css"><link rel="stylesheet" href="css/pages/moderation-extra.css"><link rel="stylesheet" href="css/header.css"><script id="lcs-auth">
+/* LCS tài khoản (dùng chung mọi trang).
+   Hai chế độ, tự chọn:
+   1) MÁY CHỦ (mở qua http://localhost sau khi chạy "node server.js"): tài khoản và người thân lưu ở file
+      data/accounts.lcsdb, mã hóa AES-256-GCM, mật khẩu băm scrypt. Trình duyệt chỉ giữ cookie phiên HttpOnly.
+   2) TRÌNH DUYỆT (mở trực tiếp file HTML): trình duyệt không cho trang ghi file ra ổ đĩa, nên tạm lưu trong
+      localStorage của máy này, mật khẩu băm PBKDF2-SHA256 có muối. Chỉ dùng để trình diễn. */
+(function () {
+  "use strict";
+  var KA = "lcs_accounts", KS = "lcs_session", KC = "lcs_srv_user", TTL = 8 * 3600 * 1000, ITER = 120000;
+  var ROLE = { citizen: "Người dân", volunteer: "Đội tình nguyện", reviewer: "Cán bộ kiểm duyệt" };
+  var SEED = [
+    { username: "canbo.demo", name: "Cán bộ Đoàn (demo)", role: "reviewer" },
+    { username: "tinhnguyen.demo", name: "Tình nguyện viên (demo)", role: "volunteer" }
+  ];
+  var DEMO_PW = "LaChanSo@2026";
+  var SERVER = /^https?:$/.test(location.protocol);   // sẽ tắt nếu không có máy chủ Lá Chắn Số
+  var srv = { user: null, contacts: [], ready: false };
+  try { srv.user = JSON.parse(sessionStorage.getItem(KC)) || null; } catch (e) {}
+  function read(k, d) { try { var v = JSON.parse(localStorage.getItem(k)); return v == null ? d : v; } catch (e) { return d; } }
+  function write(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } }
+  function b64(buf) { var s = "", a = new Uint8Array(buf); for (var i = 0; i < a.length; i++) s += String.fromCharCode(a[i]); return btoa(s); }
+  function unb64(s) { var b = atob(s), a = new Uint8Array(b.length); for (var i = 0; i < b.length; i++) a[i] = b.charCodeAt(i); return a; }
+  function salt() { var a = new Uint8Array(16); crypto.getRandomValues(a); return b64(a); }
+  function needCrypto() { if (!(window.crypto && crypto.subtle)) throw new Error("Trình duyệt chưa hỗ trợ mã hóa mật khẩu. Hãy mở bằng Chrome hoặc Edge bản mới."); }
+  async function hash(pw, s) {
+    needCrypto();
+    var key = await crypto.subtle.importKey("raw", new TextEncoder().encode(pw), "PBKDF2", false, ["deriveBits"]);
+    return b64(await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: unb64(s), iterations: ITER }, key, 256));
+  }
+  function same(a, b) { if (a.length !== b.length) return false; var r = 0; for (var i = 0; i < a.length; i++) r |= a.charCodeAt(i) ^ b.charCodeAt(i); return r === 0; }
+  var norm = function (u) { return String(u || "").trim().toLowerCase(); };
+  function pub(a) { return a ? { username: a.username, name: a.name, role: a.role, roleLabel: ROLE[a.role] || a.role, staff: a.role !== "citizen" } : null; }
+
+  /* ---------- Chế độ máy chủ ---------- */
+  async function call(method, route, data) {
+    var r;
+    try { r = await fetch("/api/lcs/" + route, { method: method, credentials: "same-origin", cache: "no-store", headers: data ? { "Content-Type": "application/json" } : {}, body: data ? JSON.stringify(data) : undefined }); }
+    catch (e) { throw new Error("Không kết nối được máy chủ Lá Chắn Số. Kiểm tra cửa sổ đang chạy server.js."); }
+    var j = null; try { j = await r.json(); } catch (e) {}
+    if (!r.ok) { var err = new Error((j && j.message) || "Máy chủ không xử lý được yêu cầu."); if (j && j.fields) err.fields = j.fields; err.status = r.status; throw err; }
+    return j || {};
+  }
+  function setSrv(user, contacts) {
+    srv.user = user || null; srv.contacts = Array.isArray(contacts) ? contacts : [];
+    try { user ? sessionStorage.setItem(KC, JSON.stringify(user)) : sessionStorage.removeItem(KC); } catch (e) {}
+  }
+  function probe() {
+    return fetch("/api/lcs/session", { credentials: "same-origin", cache: "no-store" }).then(function (r) {
+      if (!r.ok) throw 0; return r.json();
+    }).then(function (j) {
+      if (!j || j.mode !== "server") throw 0;
+      setSrv(j.user, j.contacts); srv.ready = true; changed();
+    }).catch(function () { SERVER = false; try { sessionStorage.removeItem(KC); } catch (e) {} changed(); });
+  }
+
+  /* ---------- Chế độ trình duyệt ---------- */
+  async function ensureSeed() {
+    var acc = read(KA, {}), ch = false;
+    for (var i = 0; i < SEED.length; i++) {
+      var s = SEED[i];
+      if (!acc[s.username]) { var sl = salt(); acc[s.username] = { username: s.username, name: s.name, role: s.role, salt: sl, hash: await hash(DEMO_PW, sl), seed: true, created: new Date().toISOString() }; ch = true; }
+    }
+    if (ch) write(KA, acc);
+  }
+  function localSession() {
+    var s = read(KS, null);
+    if (!s || !s.username || !(s.exp > Date.now())) return null;
+    return pub(read(KA, {})[s.username]);
+  }
+
+  /* ---------- Giao diện chung (giữ nguyên cho mọi trang) ---------- */
+  function session() { return SERVER ? (srv.user ? pub(srv.user) : null) : localSession(); }
+  async function login(username, pw) {
+    if (SERVER) { var j = await call("POST", "login", { username: username, password: pw }); setSrv(j.user, j.contacts); changed(); return session(); }
+    await ensureSeed();
+    var u = norm(username), a = read(KA, {})[u];
+    var h = a ? await hash(String(pw || ""), a.salt) : await hash(String(pw || ""), salt());
+    if (!a || !same(h, a.hash)) throw new Error("Tên đăng nhập hoặc mật khẩu không đúng.");
+    if (!write(KS, { username: u, exp: Date.now() + TTL })) throw new Error("Trình duyệt đang chặn lưu dữ liệu nên chưa đăng nhập được.");
+    changed(); return session();
+  }
+  async function register(o) {
+    if (SERVER) { var j = await call("POST", "register", { name: o.name, username: o.username, password: o.password, confirm: o.confirm }); setSrv(j.user, j.contacts); changed(); return session(); }
+    var name = String(o.name || "").trim(), u = norm(o.username), pw = String(o.password || ""), errors = {};
+    if (name.length < 2 || name.length > 50) errors.name = "Tên hiển thị từ 2 đến 50 ký tự.";
+    if (!/^[a-z0-9._]{4,30}$/.test(u)) errors.username = "Tên đăng nhập 4–30 ký tự, chỉ gồm chữ không dấu, số, dấu chấm hoặc gạch dưới.";
+    if (pw.length < 8 || !/[A-Za-z]/.test(pw) || !/\d/.test(pw)) errors.password = "Mật khẩu tối thiểu 8 ký tự, có cả chữ và số.";
+    if (pw !== String(o.confirm || "")) errors.confirm = "Mật khẩu nhập lại chưa khớp.";
+    await ensureSeed();
+    var acc = read(KA, {});
+    if (!errors.username && acc[u]) errors.username = "Tên đăng nhập này đã có người dùng.";
+    if (Object.keys(errors).length) { var e = new Error("Vui lòng kiểm tra lại thông tin."); e.fields = errors; throw e; }
+    var sl = salt();
+    acc[u] = { username: u, name: name, role: "citizen", salt: sl, hash: await hash(pw, sl), created: new Date().toISOString() };
+    if (!write(KA, acc)) throw new Error("Trình duyệt đang chặn lưu dữ liệu nên chưa tạo được tài khoản.");
+    write(KS, { username: u, exp: Date.now() + TTL });
+    changed(); return session();
+  }
+  function logout() {
+    if (SERVER) { setSrv(null, []); call("POST", "logout", {}).catch(function () {}); changed(); return; }
+    try { localStorage.removeItem(KS); } catch (e) {} changed();
+  }
+  function contacts() {
+    var s = session(); if (!s) return [];
+    if (SERVER) return srv.contacts.map(function (c) { return { name: c.name, phone: c.phone, preferred: !!c.preferred }; });
+    return read("lcs_contacts:" + s.username, []);
+  }
+  function saveContacts(list) {
+    var s = session(); if (!s) return false;
+    list = (list || []).slice(0, 10);
+    if (SERVER) {
+      srv.contacts = list.map(function (c) { return { name: c.name, phone: c.phone, preferred: !!c.preferred }; });
+      call("PUT", "contacts", { contacts: srv.contacts }).then(function (j) { srv.contacts = j.contacts || srv.contacts; })
+        .catch(function (e) { if (e.status === 401) { setSrv(null, []); changed(); } try { window.dispatchEvent(new CustomEvent("lcs:save-error", { detail: e.message })); } catch (x) {} });
+      return true;
+    }
+    return write("lcs_contacts:" + s.username, list);
+  }
+  /* ---------- Báo cáo: mã tra cứu, lịch sử theo tài khoản, kiểm duyệt ----------
+     Máy chủ: lưu trong data/accounts.lcsdb (mã hóa). Trình duyệt: localStorage "lcs_reports".
+     Chỉ lưu bản băm SHA-256 của mã tra cứu, không lưu mã gốc. */
+  var RK = "lcs_reports", ALPHA = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  var STATUS = { PENDING_VERIFICATION: "Chờ xác minh", UNDER_REVIEW: "Đang xác minh", VERIFIED: "Đã xác minh", INSUFFICIENT_EVIDENCE: "Chưa đủ căn cứ", REJECTED: "Bị từ chối" };
+  var CATS = { fake_authority: "Giả danh công an / ngân hàng", fake_job: "Việc nhẹ, lương cao", phishing: "Đường dẫn giả mạo", fake_gift: "Nhận quà / trúng thưởng", investment: "Đầu tư / sinh lời", other: "Hình thức khác" };
+  function rnd(n) { var a = new Uint8Array(n); crypto.getRandomValues(a); var s = ""; for (var i = 0; i < n; i++) s += ALPHA[a[i] % 32]; return s; }
+  function normCode(v) { var c = String(v || "").toUpperCase().replace(/[^A-Z0-9]/g, ""); if (c.indexOf("LCS") === 0) c = c.slice(3); return /^[A-HJ-NP-Z2-9]{12}$/.test(c) ? "LCS-" + c.slice(0, 4) + "-" + c.slice(4, 8) + "-" + c.slice(8) : null; }
+  async function sha(t) { needCrypto(); var b = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t))); var h = ""; for (var i = 0; i < b.length; i++) h += ("0" + b[i].toString(16)).slice(-2); return h; }
+  function rlist() { var a = read(RK, []); return Array.isArray(a) ? a.filter(function (r) { return r && typeof r.id === "string" && STATUS[r.status] && Array.isArray(r.events); }) : []; }
+  function pubR(r) {
+    var last = r.events.slice().reverse().find(function (e) { return e.to_status === r.status; });
+    return { reference: r.reference, status: r.status, category: r.category, indicator_type: r.indicator_type, created_at: r.created_at, updated_at: r.updated_at,
+      reason: r.status === "REJECTED" && last ? last.reason : null, steps: r.events.map(function (e) { return { status: e.to_status, at: e.created_at }; }) };
+  }
+  var reports = Object.freeze({
+    STATUS: STATUS, CATS: CATS, normCode: normCode,
+    submit: async function (p) {
+      await readyP;
+      if (SERVER) return call("POST", "reports", { category: p.category, indicator_type: p.indicator_type, indicator: p.indicator, description: p.description, ward: p.ward });
+      var now = new Date(), iso = now.toISOString(), code = normCode(rnd(12)), list = rlist(), me = session();
+      var dup = list.some(function (x) { return String(x.indicator || "").toLowerCase() === String(p.indicator).toLowerCase(); });
+      var r = { id: "f02-" + Date.now().toString(36) + "-" + rnd(4).toLowerCase(), reference: code, code_hash: await sha(code), owner: me ? me.username : null,
+        category: p.category, indicator_type: p.indicator_type, indicator: p.indicator, description: p.description, ward: p.ward, province: "Đồng Nai", status: "PENDING_VERIFICATION", possible_duplicate: dup, created_at: iso, updated_at: iso, has_evidence: false, events: [] };
+      list.unshift(r);
+      if (!write(RK, list.slice(0, 300))) throw new Error("Trình duyệt đang chặn lưu dữ liệu nên chưa lưu được báo cáo.");
+      return { reference: r.reference, code: code, status: r.status, possible_duplicate: dup, owner: r.owner };
+    },
+    lookup: async function (codeIn) {
+      await readyP;
+      var code = normCode(codeIn); if (!code) throw new Error("Mã tra cứu gồm 12 ký tự sau chữ LCS, ví dụ LCS-AB2C-D3EF-GH4K.");
+      if (SERVER) return (await call("POST", "lookup", { code: code })).report;
+      var h = await sha(code), r = rlist().find(function (x) { return x.code_hash === h; });
+      if (!r) throw new Error("Không tìm thấy báo cáo với mã này trên trình duyệt này. Kiểm tra lại từng ký tự.");
+      return pubR(r);
+    },
+    mine: async function () {
+      await readyP; var me = session(); if (!me) return [];
+      if (SERVER) return (await call("GET", "myreports")).reports;
+      return rlist().filter(function (x) { return x.owner === me.username; }).map(pubR);
+    },
+    reviewList: async function () {
+      await readyP;
+      if (SERVER) return (await call("GET", "review/reports")).reports;
+      return rlist().map(function (r) { var x = Object.assign({}, r); delete x.code_hash; x.has_account = !!x.owner; x.reporter = x.owner ? { username: x.owner, name: (read(KA, {})[x.owner] || {}).name || x.owner } : null; delete x.owner; return x; });
+    },
+    decide: async function (id, b) {
+      await readyP;
+      if (SERVER) return (await call("POST", "review/decision", { id: id, target: b.target, reason: b.reason, evidence_basis: b.evidence_basis, evidence_checked: !!b.evidence_checked, expected_updated_at: b.expected_updated_at })).report;
+      var list = rlist(), r = list.find(function (x) { return x.id === id; }); if (!r) throw new Error("Không tìm thấy hồ sơ.");
+      var t = new Date().toISOString(), me = session();
+      r.events.push({ actor: me ? me.username : "reviewer-demo", from_status: r.status, to_status: b.target, reason: b.reason, evidence_basis: b.evidence_basis || "", created_at: t });
+      r.status = b.target; r.updated_at = t;
+      if (!write(RK, list)) throw new Error("Trình duyệt đang chặn lưu dữ liệu.");
+      var x = Object.assign({}, r); delete x.code_hash; x.has_account = !!x.owner; x.reporter = x.owner ? { username: x.owner, name: (read(KA, {})[x.owner] || {}).name || x.owner } : null; delete x.owner; return x;
+    }
+  });
+  function mode() { return SERVER ? "server" : "local"; }
+  function chip() {
+    var s = session();
+    document.querySelectorAll("[data-lcs-acct]").forEach(function (a) {
+      var t = a.querySelector(".lcs-acct-t");
+      if (t) t.textContent = s ? s.name : "Tài khoản";
+      a.classList.toggle("in", !!s);
+      a.setAttribute("aria-label", s ? "Tài khoản: " + s.name + " (" + (ROLE[s.role] || "") + ")" : "Đăng nhập hoặc tạo tài khoản");
+      a.title = s ? s.name + " · " + (ROLE[s.role] || "") : "Tài khoản: đăng nhập hoặc tạo mới";
+    });
+  }
+  function changed() { chip(); try { window.dispatchEvent(new CustomEvent("lcs:auth", { detail: session() })); } catch (e) {} }
+  window.addEventListener("storage", function (e) { if (!SERVER && (e.key === KS || e.key === KA)) changed(); });
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", chip); else chip();
+  var readyP = SERVER ? probe() : Promise.resolve();
+  window.LCS = Object.freeze({ session: session, login: login, register: register, logout: logout, contacts: contacts, saveContacts: saveContacts, mode: mode, reports: reports, ROLE: ROLE, SEED: SEED, DEMO_PW: DEMO_PW });
+})();
+</script>
+</head><body>
+<a class="skip" href="#content">Đến nội dung chính</a><!-- LCS-HEADER:START (giống hệt nhau ở mọi trang, chỉ khác mục đang chọn) -->
+<div class="lcs-hdr" role="banner"><div class="lcs-hdr-in">
+  <a href="index.html" class="lcs-logo" aria-label="Lá Chắn Số - về trang chủ"><span class="lcs-mark"><svg class="lcs-emblem" viewBox="0 0 200 104" aria-hidden="true" focusable="false"><rect x="3" y="3" width="194" height="42" fill="#003d82" stroke="#fff" stroke-width="5"/><text x="100" y="31" text-anchor="middle" font-family="Be Vietnam Pro,Arial,sans-serif" font-weight="800" font-size="17" fill="#fff" textLength="172" lengthAdjust="spacingAndGlyphs">THANH NIÊN VIỆT NAM</text><path d="M24 50H176L100 101Z" fill="#e5373a" stroke="#fff" stroke-width="5" stroke-linejoin="miter"/><path d="M100 56l4.4 9.6 10.4 1.2-7.7 7.1 2.1 10.3L100 78.8l-9.2 4.4 2.1-10.3-7.7-7.1 10.4-1.2Z" fill="#fad550"/></svg></span><span class="lcs-brand">LÁ CHẮN <span>SỐ</span><small>Vì một cộng đồng an toàn</small></span></a>
+  <nav class="lcs-nav" aria-label="Chức năng"><a href="index.html">Trang chủ</a><a href="quick-check.html">Kiểm tra</a><a href="message-check.html">Tin nhắn</a><a href="learn.html">Học 1 phút</a><a href="quiz.html">Quiz</a><a href="ask-family.html">Người thân</a><a href="report.html">Báo cáo</a></nav>
+  <span class="lcs-right"><a class="lcs-home" href="index.html" aria-label="Trang chủ"><svg class="lcs-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 11 9-8 9 8v10H3V11Zm6 10v-7h6v7"/></svg>Trang chủ</a><a class="lcs-acct" href="account.html" data-lcs-acct><svg class="lcs-ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg><span class="lcs-acct-t">Tài khoản</span></a><span data-lcs-fs></span></span>
+</div></div>
+<!-- LCS-HEADER:END -->
+<main id="content" tabindex="-1"><div class="f12-bar"><div><p class="eyebrow">Dành cho cán bộ Đoàn</p><strong>Trung tâm tiếp nhận và kiểm duyệt</strong></div><div id="account"></div></div><div id="mode" class="banner" role="note"></div><div id="notice" role="status" aria-live="polite"></div><div id="app"></div></main><footer>Bản demo nội bộ · Không phải kênh tiếp nhận của Công an</footer><script>'use strict';
+const $=s=>document.querySelector(s), app=$('#app'), notice=$('#notice');
+const DEMO=true;
+const ST=['PENDING_VERIFICATION','UNDER_REVIEW','VERIFIED','INSUFFICIENT_EVIDENCE','REJECTED'];
+const labels=['Chờ xác minh','Đang xác minh','Đã xác minh','Chưa đủ căn cứ','Bị từ chối'];
+const styles=['pending','review','verified','insufficient','rejected'];
+const cats={fake_authority:'Giả danh cơ quan chức năng',fake_job:'Việc nhẹ, lương cao',phishing:'Đường dẫn giả mạo',fake_gift:'Thông báo nhận quà',investment:'Đầu tư giả mạo',other:'Khác'};
+const e=s=>String(s??'').replace(/[&<>"']/g,x=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[x]));
+function who(r,row){const p=r.reporter;const t=p?e(p.name||p.username)+' (@'+e(p.username)+')':'Ẩn danh';return row?'<span class="who'+(p?'':' anon')+'">Người báo cáo: '+t+'</span>':(p?t+' · có tài khoản':'Ẩn danh · gửi không đăng nhập')}
+const badge=s=>`<span class="status ${styles[ST.indexOf(s)]||'insufficient'}">${e(labels[ST.indexOf(s)]||s)}</span>`;
+const date=s=>{const d=new Date(s);return Number.isNaN(+d)?e(s):e(d.toLocaleString('vi-VN',{dateStyle:'short',timeStyle:'short',timeZone:'Asia/Ho_Chi_Minh'}));};
+const initialFilters=()=>({search:'',status:'all',category:'all',page:1});
+let role=null,csrf='',dataMode=DEMO,filters=initialFilters(),record=null,screen='login',working=false,draft=null,lastView=null,lastId=null,agg=null;
+const fail=(status,message)=>Object.assign(new Error(message),{status});
+const demoRows=(()=>{const t=new Date().toISOString().slice(0,7)+'-01T08:00:00Z';return ['fake_authority','fake_job','phishing','fake_gift','other',...Array(5).fill('phishing'),...Array(2).fill('fake_job')].map((category,i)=>{const status=i===1?ST[1]:i===3?ST[3]:i>=5?ST[2]:ST[0];return {id:`demo-${String(i+1).padStart(2,'0')}`,reference:`LCS-MAU2-HS26-DM${'ABCDEFGHJKLMNPQR'[i]}${'ABCDEFGHJKLMNPQR'[i]}`,category,indicator_type:category==='phishing'?'url':'message',indicator:category==='phishing'?`https://mau-${i+1}.invalid`:`TÌNH HUỐNG MẪU ${i+1}`,description:{fake_authority:'Mô phỏng: cuộc gọi tự xưng cơ quan chức năng, yêu cầu chuyển tiền để xác minh.',fake_job:'Mô phỏng: lời mời việc làm online, yêu cầu nộp phí trước.',phishing:'Mô phỏng: đường dẫn giả mạo yêu cầu nhập thông tin đăng nhập.',fake_gift:'Mô phỏng: thông báo nhận quà, yêu cầu đóng phí.',other:'Mô phỏng: yêu cầu chuyển tiền khẩn cấp, chưa có bằng chứng.'}[category],ward:'Khu vực mẫu A',province:'Đồng Nai',status,possible_duplicate:i===2,created_at:t,updated_at:t,has_evidence:false,events:status===ST[0]?[]:[{actor:'demo-seed',from_status:ST[0],to_status:ST[1],reason:'Tiếp nhận hồ sơ mô phỏng.',evidence_basis:'',created_at:t},...(status===ST[1]?[]:[{actor:'demo-seed',from_status:ST[1],to_status:status,reason:'Quyết định minh họa, không phải kết luận thực tế.',evidence_basis:status===ST[2]?'Nguồn đối chiếu giả lập':'',created_at:t}])]};});})();
+const UKEY='lcs_reports',ROLE_MAP={reviewer:'reviewer',volunteer:'analyst'};
+function acct(){return window.LCS?LCS.session():null}
+async function syncUserRows(){let list=[];try{list=window.LCS?await LCS.reports.reviewList():[]}catch(err){throw fail(err.status||0,err.message)}for(const r of list.slice().reverse()){if(!r||!ST.includes(r.status))continue;const i=demoRows.findIndex(x=>x.id===r.id);if(i<0)demoRows.unshift({...r,fromF02:true});else if(demoRows[i].fromF02)demoRows[i]={...r,fromF02:true};}}
+async function api(path,body){
+ if(DEMO){
+  await new Promise(r=>setTimeout(r,100));
+  if(path==='/login'){const a=acct();if(!a||ROLE_MAP[a.role]!==body.role)throw fail(401,'Cần đăng nhập tài khoản cán bộ.');role=body.role;return {role,csrf:'demo',demo:true};} if(path==='/session'){throw fail(401,'Chưa đăng nhập.');} if(path==='/logout')return {ok:true};
+  if(!role)throw fail(401,'Vui lòng đăng nhập.');
+  if(path==='/aggregate'){let counts={};for(const r of demoRows)if(r.status===ST[2]&&!r.possible_duplicate)counts[r.category]=(counts[r.category]||0)+1;return {period:new Date().toISOString().slice(0,7),scope:'Đồng Nai',minimum_group_size:5,unit:'distinct_verified_indicators',demo:true,groups:Object.entries(counts).filter(([,n])=>n>=5).map(([category,count])=>({area:'Đồng Nai',category,count})),note:'Chỉ nhóm đủ ngưỡng; không phải tổng số vụ lừa đảo thực tế.'};}
+  if(role!=='reviewer')throw fail(403,'Bạn không có quyền truy cập.');
+  if(path.startsWith('/reports?')){await syncUserRows();const q=new URLSearchParams(path.split('?')[1]);let rows=demoRows.filter(r=>(q.get('status')==='all'||q.get('status')===r.status)&&(q.get('category')==='all'||q.get('category')===r.category)&&r.reference.toUpperCase().replace(/[^A-Z0-9]/g,'').includes(q.get('search').toUpperCase().replace(/[^A-Z0-9]/g,''))).sort((a,b)=>ST.indexOf(a.status)-ST.indexOf(b.status));return {items:rows,counts:Object.fromEntries(ST.map(s=>[s,demoRows.filter(r=>r.status===s).length])),total:rows.length,page:1,page_size:20};}
+  const m=path.match(/^\/reports\/([\w-]+)(\/decision)?$/);if(!m)throw fail(404,'Không tìm thấy.');const r=demoRows.find(x=>x.id===m[1]);if(!r)throw fail(404,'Không tìm thấy hồ sơ.');
+  if(m[2]){const b=body;if(b.expected_status!==r.status||b.expected_updated_at!==r.updated_at)throw fail(409,'Hồ sơ đã thay đổi.');if(!((r.status===ST[0]&&b.target===ST[1])||(r.status===ST[1]&&[ST[2],ST[3]].includes(b.target))||([ST[0],ST[1]].includes(r.status)&&b.target===ST[4])))throw fail(409,'Không cho phép chuyển trạng thái.');if(b.reason.trim().length<10||b.reason.length>500)throw fail(422,'Lý do từ 10–500 ký tự.');if(b.target===ST[2]&&(!b.evidence_checked||b.evidence_basis.trim().length<10))throw fail(422,'Cần nguồn đối chiếu và xác nhận kiểm tra.');if(r.fromF02){let nr;try{nr=await LCS.reports.decide(r.id,b)}catch(err){throw fail(err.status||0,err.message)}Object.assign(r,nr,{fromF02:true});}else{const t=new Date().toISOString();r.events.push({actor:acct()?.username||'reviewer-demo',from_status:r.status,to_status:b.target,reason:b.reason,evidence_basis:b.evidence_basis,created_at:t});r.status=b.target;r.updated_at=t;}}
+  return JSON.parse(JSON.stringify(r));
+ }
+ const opt={credentials:'same-origin',cache:'no-store',headers:{}};if(body!==undefined){opt.method='POST';opt.headers['Content-Type']='application/json';opt.headers['X-CSRF-Token']=csrf;opt.body=JSON.stringify(body);}
+ let response;try{response=await fetch('/api/f12'+path,opt);}catch{throw fail(0,'Không kết nối được hệ thống. Dữ liệu đang nhập vẫn được giữ.');}let d;try{d=await response.json();}catch{throw fail(response.status,'Phản hồi không hợp lệ.');}if(!response.ok)throw fail(response.status,d.message||'Không thể xử lý.');return d;
+}
+function message(text='',kind=''){notice.innerHTML=text?`<div class="notice ${kind}">${e(text)}</div>`:'';}
+function mode(){ $('#mode').textContent=DEMO?(window.LCS&&LCS.mode()==='server'?'MÁY CHỦ LÁ CHẮN SỐ · Báo cáo người dân gửi qua trang Báo cáo lấy từ file dữ liệu mã hóa và hiện ở đầu danh sách. Hồ sơ có mã bắt đầu bằng LCS-MAU2 là dữ liệu giả lập minh họa.':'BẢN DEMO · Báo cáo người dân gửi qua trang Báo cáo trên trình duyệt này hiện ở đầu danh sách. Hồ sơ có mã bắt đầu bằng LCS-MAU2 là dữ liệu giả lập (tải lại trang sẽ khôi phục).'):dataMode?'MVP CỤC BỘ · Dữ liệu giả lập lưu tại SQLite. Không phải dữ liệu thực tế.':'MVP CỤC BỘ · Kết nối kho báo cáo được cấp quyền. Chỉ dùng trong môi trường nội bộ.';$('#account').innerHTML=role?`<span>${e(acct()?.name||'')} · ${role==='reviewer'?'Cán bộ kiểm duyệt':'Xem thống kê (tình nguyện)'}</span><button class="secondary" data-act="logout">Đăng xuất</button>`:'';}
+function render(html,id){screen=id;app.innerHTML=html;const h=app.querySelector('h1');if(h){h.tabIndex=-1;h.focus({preventScroll:true});}window.scrollTo(0,0);}
+function login(){role=null;csrf='';record=null;draft=null;agg=null;filters=initialFilters();mode();const a=acct();render(`<section class="card login stack"><div><p class="eyebrow">Truy cập nội bộ</p><h1>Trung tâm kiểm duyệt</h1><p class="muted">Xác minh có căn cứ. Bảo vệ dữ liệu cộng đồng.</p></div>${a&&ROLE_MAP[a.role]?`<div class="role-card"><strong>${e(a.name)}</strong><p>${e(a.roleLabel)} · ${a.role==='reviewer'?'Xem hồ sơ, kiểm tra bằng chứng và ghi quyết định có lý do.':'Chỉ xem thống kê đủ ngưỡng riêng tư, không xem hồ sơ gốc.'}</p><button class="primary full" data-act="enter">Vào trung tâm kiểm duyệt</button></div>`:a?`<div class="error-box" role="alert"><strong>Tài khoản “${e(a.name)}” là tài khoản người dân.</strong> Trang này chỉ dành cho cán bộ Đoàn được cấp quyền. Bạn vẫn có thể gửi báo cáo ở trang Báo cáo.</div><div class="actions"><a class="btnlink primary" href="report.html">Gửi báo cáo lừa đảo</a><a class="btnlink secondary" href="account.html?next=F12">Đổi tài khoản</a></div>`:`<div class="role-card"><strong>Dành cho cán bộ Đoàn</strong><p>Đăng nhập bằng tài khoản cán bộ được Đoàn cấp. Người dân không cần đăng nhập để báo cáo.</p><a class="btnlink primary full" href="account.html?next=F12">Đăng nhập tài khoản cán bộ</a></div>`}<div class="callout info">Chỉ nhân sự được phân quyền mới được xem hồ sơ. Không đồng nghĩa với kết luận của cơ quan chức năng.</div><small>Bản demo: tài khoản và báo cáo chỉ lưu trong trình duyệt này.</small></section>`,'login');}
+async function signIn(r,code=''){const d=await api('/login',{role:r,code});role=d.role;csrf=d.csrf;dataMode=d.demo;mode();if(role==='reviewer')await queue();else await aggregate();}
+const opts=(obj,value,first)=>`<option value="all" ${value==='all'?'selected':''}>${first}</option>`+Object.entries(obj).map(([k,v])=>`<option value="${e(k)}" ${k===value?'selected':''}>${e(v)}</option>`).join('');
+async function queue(){
+ lastView='queue';record=null;draft=null;render('<div class="loading" role="status">Đang tải danh sách hồ sơ…</div>','loading');
+ const q=new URLSearchParams(filters);const d=await api('/reports?'+q);
+ render(`<div class="hero"><div><p class="eyebrow">Hàng đợi xác minh</p><h1>Quản lý báo cáo</h1><p class="muted">Xem và xử lý hồ sơ theo bằng chứng, không theo số lượt tố cáo.</p></div><div class="actions"><button class="secondary" data-act="aggregate">Thống kê đã xác minh</button><button class="primary" data-act="queue">Làm mới</button></div></div><div class="metrics">${ST.map((s,i)=>`<div class="metric ${styles[i]}"><span>${labels[i]}</span><strong>${d.counts[s]??0}</strong></div>`).join('')}</div><section class="card"><h2>Danh sách hồ sơ</h2><form id="filter-form" class="filters"><div class="field search"><label for="search">Tìm mã báo cáo</label><input id="search" name="search" maxlength="60" value="${e(filters.search)}" placeholder="VD: LCS-AB2C-D3EF-GH4K"></div><div class="field"><label for="status">Trạng thái</label><select id="status" name="status">${opts(Object.fromEntries(ST.map((s,i)=>[s,labels[i]])),filters.status,'Tất cả trạng thái')}</select></div><div class="field"><label for="category">Hình thức</label><select id="category" name="category">${opts(cats,filters.category,'Tất cả hình thức')}</select></div><button class="primary" type="submit">Áp dụng</button></form><div class="list" aria-label="Kết quả tìm kiếm">${d.items.length?d.items.map(r=>`<button class="report" data-act="open" data-id="${e(r.id)}"><span>${e(r.reference)}<small>${date(r.created_at)}</small>${who(r,true)}${r.fromF02?`<span class="src-f02">Gửi qua trang Báo cáo</span>`:''}</span><span class="category">${e(cats[r.category]||r.category)}${r.possible_duplicate?'<span class="duplicate">! Có khả năng trùng</span>':''}</span><span class="statuscol">${badge(r.status)}</span><span class="chevron" aria-hidden="true">›</span></button>`).join(''):`<div class="empty"><strong>Không có hồ sơ phù hợp</strong>Thử thay đổi bộ lọc hoặc làm mới danh sách.<div><button class="ghost" data-act="reset">Xóa bộ lọc</button></div></div>`}</div><div class="pagination"><button class="secondary" data-act="prev" ${d.page<=1?'disabled':''}>Trước</button><small>Trang ${d.page} · ${d.total} hồ sơ</small><button class="secondary" data-act="next" ${d.page*d.page_size>=d.total?'disabled':''}>Sau</button></div></section>`,'queue');
+}
+async function detail(id){lastView='detail';lastId=id;render('<div class="loading" role="status">Đang tải hồ sơ…</div>','loading');record=await api('/reports/'+encodeURIComponent(id));draft=null;renderDetail();}
+function renderDetail(){const r=record;const pending=r.status===ST[0],review=r.status===ST[1],final=!pending&&!review;render(`<div class="toolbar"><button class="secondary" data-act="queue">← Danh sách</button><button class="secondary" data-act="reload-detail">Tải lại hồ sơ</button></div><div class="hero"><div><p class="eyebrow">Chi tiết hồ sơ</p><h1>${e(r.reference)}</h1>${badge(r.status)}</div></div><div class="two-col"><section class="card stack"><h2>Thông tin báo cáo</h2>${r.possible_duplicate?'<div class="callout">! Có khả năng trùng. Kiểm tra hồ sơ liên quan, không tự động xác minh.</div>':''}<div><div class="fact"><small>Người báo cáo</small><p>${who(r)}</p></div><div class="fact"><small>Hình thức</small><p>${e(cats[r.category]||r.category)}</p></div><div class="fact"><small>Thông tin bị nghi ngờ · chỉ dùng nội bộ</small><p>${e(r.indicator||'Không rõ')}</p></div><div class="fact"><small>Mô tả của người báo cáo · chưa phải kết luận</small><p>${e(r.description)}</p></div><div class="fact"><small>Khu vực khai báo</small><p>${e(r.ward||'Chưa cung cấp')} · ${e(r.province)}</p></div><div class="fact"><small>Ảnh bằng chứng</small>${r.has_evidence?'<button class="secondary" data-act="evidence">Xem ảnh riêng tư</button><div id="evidence-view" class="stack"></div>':'<p>Không có ảnh đính kèm. Cần đối chiếu nguồn độc lập nếu xác minh.</p>'}</div><div class="fact"><small>Tiếp nhận</small><p>${date(r.created_at)}</p></div></div></section><div class="stack"><section class="card stack"><h2>${final?'Quyết định cuối':'Xử lý hồ sơ'}</h2>${final?`<div class="callout info">${r.status===ST[2]?'Hồ sơ đã được xác minh theo quy trình nội bộ. Không tự động kết luận cá nhân phạm tội hoặc đưa vào blacklist.':r.status===ST[4]?'Báo cáo đã bị từ chối. Lý do đã được gửi tới người báo cáo qua trang tra cứu.':'Chưa đủ căn cứ để xác minh. Không công bố thông tin nhận dạng.'}</div><small>Không thể thay đổi quyết định cuối trong MVP.</small>`:`<form id="decision-form" class="stack" novalidate>${pending?'<p class="muted">Bước đầu tiên: nhận hồ sơ để kiểm tra.</p>':`<div class="field"><label for="target">Kết quả kiểm duyệt</label><select id="target" name="target"><option value="${ST[3]}">Chưa đủ căn cứ</option><option value="${ST[2]}">Đã xác minh</option></select></div>`}<div class="field"><label for="reason">Lý do / ghi chú bắt buộc</label><textarea id="reason" name="reason" minlength="10" maxlength="500" required placeholder="Ghi nhận lý do (10–500 ký tự)">${e(draft?.reason||'')}</textarea></div>${review?`<div class="field"><label for="basis">Nguồn đối chiếu / bằng chứng</label><textarea id="basis" name="basis" maxlength="500" placeholder="Nguồn độc lập đã đối chiếu; không nhập thông tin bí mật">${e(draft?.evidence_basis||'')}</textarea><small>Bắt buộc khi chọn Đã xác minh.</small></div><label class="check"><input type="checkbox" id="checked" name="checked" ${draft?.evidence_checked?'checked':''}>Tôi đã kiểm tra bằng chứng và nguồn đối chiếu.</label>`:''}<div id="decision-error" role="alert"></div><div class="actions decide"><button class="primary" type="submit">${pending?'Tiếp nhận hồ sơ':'Xem lại quyết định'}</button><button class="reject" type="submit" data-target="${ST[4]}">Từ chối báo cáo</button></div><small>Từ chối: lý do ở trên sẽ hiển thị cho người báo cáo khi họ tra cứu bằng mã hoặc xem lịch sử.</small></form><div id="confirm"></div>`}</section><section class="card"><h2>Nhật ký xử lý</h2>${r.events.length?`<div class="timeline">${r.events.map(x=>`<div class="event"><strong>${e(labels[ST.indexOf(x.to_status)]||x.to_status)}</strong><small>${date(x.created_at)} · ${e(x.actor)}</small><p>${e(x.reason)}</p>${x.evidence_basis?`<small>Nguồn: ${e(x.evidence_basis)}</small>`:''}</div>`).join('')}</div>`:'<p class="muted">Chưa có thao tác kiểm duyệt.</p>'}</section></div></div>`,'detail');if(review&&draft)$('#target').value=draft.target;}
+function stageDecision(form,sub){const f=new FormData(form);draft={target:sub&&sub.dataset.target===ST[4]?ST[4]:record.status===ST[0]?ST[1]:f.get('target'),expected_status:record.status,expected_updated_at:record.updated_at,reason:String(f.get('reason')||'').trim(),evidence_basis:String(f.get('basis')||'').trim(),evidence_checked:f.get('checked')==='on'};let error='';if(draft.reason.length<10||draft.reason.length>500)error=draft.target===ST[4]?'Nhập lý do từ chối (10–500 ký tự). Người báo cáo sẽ đọc được lý do này.':'Lý do phải từ 10–500 ký tự.';else if(draft.target===ST[2]&&(draft.evidence_basis.length<10||!draft.evidence_checked))error='Cần ghi nguồn đối chiếu (ít nhất 10 ký tự) và xác nhận đã kiểm tra bằng chứng.';$('#decision-error').innerHTML=error?`<div class="error-box">${e(error)}</div>`:'';$('#confirm').innerHTML='';if(error)return;$('#confirm').innerHTML=`<section class="confirm stack"><h3>Xác nhận quyết định</h3><p>${badge(record.status)} → ${badge(draft.target)}</p><p><strong>${draft.target===ST[4]?'Lý do từ chối (người báo cáo sẽ thấy)':'Lý do'}:</strong> ${e(draft.reason)}</p>${draft.evidence_basis?`<p><strong>Nguồn:</strong> ${e(draft.evidence_basis)}</p>`:''}<small>Quyết định được lưu cùng nhật ký. Kiểm tra kỹ trước khi xác nhận.</small><div class="actions"><button class="primary" data-act="commit">Xác nhận lưu</button><button class="secondary" data-act="cancel">Sửa lại</button></div></section>`;$('#confirm').scrollIntoView({block:'nearest'});$('#confirm button').focus();}
+async function commit(){if(!draft)return;const result=await api('/reports/'+encodeURIComponent(record.id)+'/decision',draft);record=result;draft=null;renderDetail();message(record.fromF02?(record.status===ST[4]?'Đã từ chối báo cáo. Người báo cáo sẽ thấy lý do khi tra cứu.':'Đã lưu quyết định. Người báo cáo sẽ thấy trạng thái mới khi tra cứu.'):'Đã lưu quyết định mô phỏng.','ok');}
+async function aggregate(){lastView='aggregate';render('<div class="loading" role="status">Đang tải thống kê…</div>','loading');agg=await api('/aggregate');const rows=agg.groups;render(`<div class="hero"><div><p class="eyebrow">Dữ liệu bàn giao cho Đội tình nguyện</p><h1>Thống kê đã xác minh</h1><p class="muted">${e(agg.scope)} · Kỳ ${e(agg.period)} (UTC)</p></div><div class="actions">${role==='reviewer'?'<button class="secondary" data-act="queue">← Danh sách</button>':''}<button class="secondary" data-act="aggregate">Làm mới</button><button class="primary" data-act="export">Xuất JSON</button></div></div><section class="card stack"><div class="callout info"><strong>Chỉ dữ liệu tổng hợp được chia sẻ</strong><p>Loại hồ sơ chưa xác minh, nghi trùng và thiếu chỉ dấu; chỉ nhóm có ít nhất ${agg.minimum_group_size} chỉ dấu phân biệt. Không có tên, số điện thoại, đường dẫn gốc, ảnh hoặc mã tra cứu.</p></div><h2>Hình thức lừa đảo đủ ngưỡng</h2>${rows.length?rows.map(r=>`<div class="barrow"><div class="barlabel"><strong>${e(cats[r.category]||r.category)}</strong><strong>${r.count}</strong></div><small>${e(r.area)}</small><div class="bar"><progress max="${Math.max(...rows.map(x=>x.count))}" value="${r.count}" aria-label="${e(cats[r.category])}"></progress></div></div>`).join(''):'<div class="empty"><strong>Chưa có nhóm đủ ngưỡng</strong>Chờ thêm báo cáo được xác minh. Không suy diễn từ dữ liệu thiếu.</div>'}<small>${e(agg.note)} Không dùng để suy ra tổng số người bị hại. Dữ liệu theo tháng có thể thay đổi khi kiểm duyệt.</small></section>`,'aggregate');}
+async function run(fn){if(working)return;working=true;message();try{await fn();}catch(err){if(err.status===401&&role){login();message('Phiên đã hết hạn. Vui lòng đăng nhập lại.','error');}else{message(err.message||'Có lỗi xảy ra. Vui lòng thử lại.','error');if(screen==='loading')render(`<section class="card stack"><h1>Không tải được dữ liệu</h1><p>${e(err.message)}</p><button class="primary" data-act="retry">Thử lại</button>${role==='reviewer'?'<button class="secondary" data-act="queue">Về danh sách</button>':''}</section>`,'error');}}finally{working=false;}}
+app.addEventListener('submit',ev=>{ev.preventDefault();const f=ev.target;if(f.id==='login-form'){const fd=new FormData(f);run(()=>signIn(fd.get('role'),fd.get('code')));}if(f.id==='filter-form'){const fd=new FormData(f);filters={search:fd.get('search'),status:fd.get('status'),category:fd.get('category'),page:1};run(queue);}if(f.id==='decision-form')stageDecision(f,ev.submitter);});
+app.addEventListener('input',ev=>{if(ev.target.closest('#decision-form')&&$('#confirm'))$('#confirm').innerHTML='';});
+document.addEventListener('click',ev=>{const b=ev.target.closest('[data-act]');if(!b||b.disabled)return;const act=b.dataset.act;const commands={
+ 'enter':()=>{const a=acct();if(a&&ROLE_MAP[a.role])return signIn(ROLE_MAP[a.role]);login();},'queue':queue,'aggregate':aggregate,'open':()=>detail(b.dataset.id),'reload-detail':()=>detail(record.id),'reset':()=>{filters=initialFilters();return queue();},'prev':()=>{filters.page=Math.max(1,filters.page-1);return queue();},'next':()=>{filters.page++;return queue();},'cancel':()=>{$('#confirm').innerHTML='';},'commit':commit,'logout':async()=>{await api('/logout',{});if(window.LCS)LCS.logout();login();},'retry':()=>lastView==='aggregate'?aggregate():lastView==='detail'&&lastId?detail(lastId):queue(),
+ 'evidence':()=>{if(!record?.has_evidence)return;const node=$('#evidence-view');node.innerHTML='';const img=document.createElement('img');img.className='evidence-preview';img.alt='Ảnh bằng chứng riêng tư';img.src='/api/f12/reports/'+encodeURIComponent(record.id)+'/evidence';img.onerror=()=>{node.textContent='Không tải được ảnh. Thử lại hoặc kiểm tra nguồn.';};node.append(img);},
+ 'export':()=>{if(!agg)return;const url=URL.createObjectURL(new Blob([JSON.stringify(agg,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='thong-ke-kiem-duyet.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),500);message('Đã tạo tệp dữ liệu tổng hợp.','ok');}
+ };if(commands[act])run(commands[act]);});
+window.addEventListener('lcs:auth',()=>{const a=acct(),want=(a&&ROLE_MAP[a.role])||null;if(want!==role){if(want)run(()=>signIn(want));else login();}});
+(async()=>{mode();if(DEMO){const a=acct();if(a&&ROLE_MAP[a.role])run(()=>signIn(ROLE_MAP[a.role]));else login();return;}try{const d=await api('/session');role=d.role;csrf=d.csrf;dataMode=d.demo;mode();await run(role==='reviewer'?queue:aggregate);}catch{login();try{const r=await api('/health');dataMode=r.demo;mode();}catch{message('Không kết nối được server.','error');}}})();
+</script>
+<!-- LCS cỡ chữ: nút A− / A+ đồng bộ giữa các trang qua localStorage "lcs_font_scale" -->
+<link rel="stylesheet" href="css/font-size.css">
+<script>
+(function () {
+  var s = window.__lcsFont || { L: [0.9, 1, 1.15, 1.3], i: 1 };
+  var hosts = document.querySelectorAll("[data-lcs-fs]");
+  var outs = [], decs = [], incs = [];
+  hosts.forEach(function (host) {
+    host.innerHTML = '<div class="lcs-fs" role="group" aria-label="Cỡ chữ">' +
+      '<button type="button" data-d="-1" aria-label="Giảm cỡ chữ" title="Giảm cỡ chữ"><span class="lcs-fs-small">A</span>−</button>' +
+      '<output aria-live="polite"></output>' +
+      '<button type="button" data-d="1" aria-label="Tăng cỡ chữ" title="Tăng cỡ chữ">A+</button></div>';
+    outs.push(host.querySelector("output"));
+    decs.push(host.querySelector('[data-d="-1"]'));
+    incs.push(host.querySelector('[data-d="1"]'));
+    host.addEventListener("click", function (e) {
+      var b = e.target.closest("button[data-d]");
+      if (b) set(s.i + Number(b.dataset.d), true);
+    });
+  });
+  function layout() {
+    var w = window.innerWidth / s.L[s.i];
+    document.documentElement.classList.toggle("lcs-compact", w < 1140 && window.innerWidth >= 851);
+    document.documentElement.classList.toggle("lcs-narrow", w < 560);
+  }
+  function set(i, save) {
+    i = Math.max(0, Math.min(s.L.length - 1, i));
+    s.i = i;
+    document.documentElement.style.zoom = s.L[i];
+    outs.forEach(function (o) { o.textContent = Math.round(s.L[i] * 100) + "%"; });
+    decs.forEach(function (b) { b.disabled = i === 0; });
+    incs.forEach(function (b) { b.disabled = i === s.L.length - 1; });
+    if (save) { try { localStorage.setItem("lcs_font_scale", String(s.L[i])); } catch (e) {} }
+    layout();
+  }
+  // Đồng bộ ngay với các tab khác đang mở
+  window.addEventListener("storage", function (e) {
+    if (e.key === "lcs_font_scale") { var k = s.L.indexOf(parseFloat(e.newValue)); set(k >= 0 ? k : 1, false); }
+  });
+  window.addEventListener("resize", layout);
+  set(s.i, false);
+})();
+</script>
+</body></html>

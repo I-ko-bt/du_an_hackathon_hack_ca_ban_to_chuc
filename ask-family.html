@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#00539c" /><link rel="icon" type="image/svg+xml" href="favicon.svg" /><meta name="referrer" content="no-referrer"><title>Lá Chắn Số | Hỏi người thân</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@500;600;700&family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<!-- LCS cỡ chữ (dùng chung mọi trang): áp dụng trước khi vẽ trang để không bị nháy -->
+<script>(function(){var L=[0.9,1,1.15,1.3],i=1;try{var k=L.indexOf(parseFloat(localStorage.getItem("lcs_font_scale")));if(k>=0)i=k}catch(e){}window.__lcsFont={L:L,i:i};document.documentElement.style.zoom=L[i];})();</script>
+<link rel="stylesheet" href="css/theme.css"><link rel="stylesheet" href="css/pages/ask-family.css">
+<link rel="stylesheet" href="css/typography.css"><link rel="stylesheet" href="css/pages/ask-family-extra.css"><link rel="stylesheet" href="css/header.css">
+<script id="lcs-auth">
+/* LCS tài khoản (dùng chung mọi trang).
+   Hai chế độ, tự chọn:
+   1) MÁY CHỦ (mở qua http://localhost sau khi chạy "node server.js"): tài khoản và người thân lưu ở file
+      data/accounts.lcsdb, mã hóa AES-256-GCM, mật khẩu băm scrypt. Trình duyệt chỉ giữ cookie phiên HttpOnly.
+   2) TRÌNH DUYỆT (mở trực tiếp file HTML): trình duyệt không cho trang ghi file ra ổ đĩa, nên tạm lưu trong
+      localStorage của máy này, mật khẩu băm PBKDF2-SHA256 có muối. Chỉ dùng để trình diễn. */
+(function () {
+  "use strict";
+  var KA = "lcs_accounts", KS = "lcs_session", KC = "lcs_srv_user", TTL = 8 * 3600 * 1000, ITER = 120000;
+  var ROLE = { citizen: "Người dân", volunteer: "Đội tình nguyện", reviewer: "Cán bộ kiểm duyệt" };
+  var SEED = [
+    { username: "canbo.demo", name: "Cán bộ Đoàn (demo)", role: "reviewer" },
+    { username: "tinhnguyen.demo", name: "Tình nguyện viên (demo)", role: "volunteer" }
+  ];
+  var DEMO_PW = "LaChanSo@2026";
+  var SERVER = /^https?:$/.test(location.protocol);   // sẽ tắt nếu không có máy chủ Lá Chắn Số
+  var srv = { user: null, contacts: [], ready: false };
+  try { srv.user = JSON.parse(sessionStorage.getItem(KC)) || null; } catch (e) {}
+  function read(k, d) { try { var v = JSON.parse(localStorage.getItem(k)); return v == null ? d : v; } catch (e) { return d; } }
+  function write(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } }
+  function b64(buf) { var s = "", a = new Uint8Array(buf); for (var i = 0; i < a.length; i++) s += String.fromCharCode(a[i]); return btoa(s); }
+  function unb64(s) { var b = atob(s), a = new Uint8Array(b.length); for (var i = 0; i < b.length; i++) a[i] = b.charCodeAt(i); return a; }
+  function salt() { var a = new Uint8Array(16); crypto.getRandomValues(a); return b64(a); }
+  function needCrypto() { if (!(window.crypto && crypto.subtle)) throw new Error("Trình duyệt chưa hỗ trợ mã hóa mật khẩu. Hãy mở bằng Chrome hoặc Edge bản mới."); }
+  async function hash(pw, s) {
+    needCrypto();
+    var key = await crypto.subtle.importKey("raw", new TextEncoder().encode(pw), "PBKDF2", false, ["deriveBits"]);
+    return b64(await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: unb64(s), iterations: ITER }, key, 256));
+  }
+  function same(a, b) { if (a.length !== b.length) return false; var r = 0; for (var i = 0; i < a.length; i++) r |= a.charCodeAt(i) ^ b.charCodeAt(i); return r === 0; }
+  var norm = function (u) { return String(u || "").trim().toLowerCase(); };
+  function pub(a) { return a ? { username: a.username, name: a.name, role: a.role, roleLabel: ROLE[a.role] || a.role, staff: a.role !== "citizen" } : null; }
+
+  /* ---------- Chế độ máy chủ ---------- */
+  async function call(method, route, data) {
+    var r;
+    try { r = await fetch("/api/lcs/" + route, { method: method, credentials: "same-origin", cache: "no-store", headers: data ? { "Content-Type": "application/json" } : {}, body: data ? JSON.stringify(data) : undefined }); }
+    catch (e) { throw new Error("Không kết nối được máy chủ Lá Chắn Số. Kiểm tra cửa sổ đang chạy server.js."); }
+    var j = null; try { j = await r.json(); } catch (e) {}
+    if (!r.ok) { var err = new Error((j && j.message) || "Máy chủ không xử lý được yêu cầu."); if (j && j.fields) err.fields = j.fields; err.status = r.status; throw err; }
+    return j || {};
+  }
+  function setSrv(user, contacts) {
+    srv.user = user || null; srv.contacts = Array.isArray(contacts) ? contacts : [];
+    try { user ? sessionStorage.setItem(KC, JSON.stringify(user)) : sessionStorage.removeItem(KC); } catch (e) {}
+  }
+  function probe() {
+    return fetch("/api/lcs/session", { credentials: "same-origin", cache: "no-store" }).then(function (r) {
+      if (!r.ok) throw 0; return r.json();
+    }).then(function (j) {
+      if (!j || j.mode !== "server") throw 0;
+      setSrv(j.user, j.contacts); srv.ready = true; changed();
+    }).catch(function () { SERVER = false; try { sessionStorage.removeItem(KC); } catch (e) {} changed(); });
+  }
+
+  /* ---------- Chế độ trình duyệt ---------- */
+  async function ensureSeed() {
+    var acc = read(KA, {}), ch = false;
+    for (var i = 0; i < SEED.length; i++) {
+      var s = SEED[i];
+      if (!acc[s.username]) { var sl = salt(); acc[s.username] = { username: s.username, name: s.name, role: s.role, salt: sl, hash: await hash(DEMO_PW, sl), seed: true, created: new Date().toISOString() }; ch = true; }
+    }
+    if (ch) write(KA, acc);
+  }
+  function localSession() {
+    var s = read(KS, null);
+    if (!s || !s.username || !(s.exp > Date.now())) return null;
+    return pub(read(KA, {})[s.username]);
+  }
+
+  /* ---------- Giao diện chung (giữ nguyên cho mọi trang) ---------- */
+  function session() { return SERVER ? (srv.user ? pub(srv.user) : null) : localSession(); }
+  async function login(username, pw) {
+    if (SERVER) { var j = await call("POST", "login", { username: username, password: pw }); setSrv(j.user, j.contacts); changed(); return session(); }
+    await ensureSeed();
+    var u = norm(username), a = read(KA, {})[u];
+    var h = a ? await hash(String(pw || ""), a.salt) : await hash(String(pw || ""), salt());
+    if (!a || !same(h, a.hash)) throw new Error("Tên đăng nhập hoặc mật khẩu không đúng.");
+    if (!write(KS, { username: u, exp: Date.now() + TTL })) throw new Error("Trình duyệt đang chặn lưu dữ liệu nên chưa đăng nhập được.");
+    changed(); return session();
+  }
+  async function register(o) {
+    if (SERVER) { var j = await call("POST", "register", { name: o.name, username: o.username, password: o.password, confirm: o.confirm }); setSrv(j.user, j.contacts); changed(); return session(); }
+    var name = String(o.name || "").trim(), u = norm(o.username), pw = String(o.password || ""), errors = {};
+    if (name.length < 2 || name.length > 50) errors.name = "Tên hiển thị từ 2 đến 50 ký tự.";
+    if (!/^[a-z0-9._]{4,30}$/.test(u)) errors.username = "Tên đăng nhập 4–30 ký tự, chỉ gồm chữ không dấu, số, dấu chấm hoặc gạch dưới.";
+    if (pw.length < 8 || !/[A-Za-z]/.test(pw) || !/\d/.test(pw)) errors.password = "Mật khẩu tối thiểu 8 ký tự, có cả chữ và số.";
+    if (pw !== String(o.confirm || "")) errors.confirm = "Mật khẩu nhập lại chưa khớp.";
+    await ensureSeed();
+    var acc = read(KA, {});
+    if (!errors.username && acc[u]) errors.username = "Tên đăng nhập này đã có người dùng.";
+    if (Object.keys(errors).length) { var e = new Error("Vui lòng kiểm tra lại thông tin."); e.fields = errors; throw e; }
+    var sl = salt();
+    acc[u] = { username: u, name: name, role: "citizen", salt: sl, hash: await hash(pw, sl), created: new Date().toISOString() };
+    if (!write(KA, acc)) throw new Error("Trình duyệt đang chặn lưu dữ liệu nên chưa tạo được tài khoản.");
+    write(KS, { username: u, exp: Date.now() + TTL });
+    changed(); return session();
+  }
+  function logout() {
+    if (SERVER) { setSrv(null, []); call("POST", "logout", {}).catch(function () {}); changed(); return; }
+    try { localStorage.removeItem(KS); } catch (e) {} changed();
+  }
+  function contacts() {
+    var s = session(); if (!s) return [];
+    if (SERVER) return srv.contacts.map(function (c) { return { name: c.name, phone: c.phone, preferred: !!c.preferred }; });
+    return read("lcs_contacts:" + s.username, []);
+  }
+  function saveContacts(list) {
+    var s = session(); if (!s) return false;
+    list = (list || []).slice(0, 10);
+    if (SERVER) {
+      srv.contacts = list.map(function (c) { return { name: c.name, phone: c.phone, preferred: !!c.preferred }; });
+      call("PUT", "contacts", { contacts: srv.contacts }).then(function (j) { srv.contacts = j.contacts || srv.contacts; })
+        .catch(function (e) { if (e.status === 401) { setSrv(null, []); changed(); } try { window.dispatchEvent(new CustomEvent("lcs:save-error", { detail: e.message })); } catch (x) {} });
+      return true;
+    }
+    return write("lcs_contacts:" + s.username, list);
+  }
+  /* ---------- Báo cáo: mã tra cứu, lịch sử theo tài khoản, kiểm duyệt ----------
+     Máy chủ: lưu trong data/accounts.lcsdb (mã hóa). Trình duyệt: localStorage "lcs_reports".
+     Chỉ lưu bản băm SHA-256 của mã tra cứu, không lưu mã gốc. */
+  var RK = "lcs_reports", ALPHA = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  var STATUS = { PENDING_VERIFICATION: "Chờ xác minh", UNDER_REVIEW: "Đang xác minh", VERIFIED: "Đã xác minh", INSUFFICIENT_EVIDENCE: "Chưa đủ căn cứ", REJECTED: "Bị từ chối" };
+  var CATS = { fake_authority: "Giả danh công an / ngân hàng", fake_job: "Việc nhẹ, lương cao", phishing: "Đường dẫn giả mạo", fake_gift: "Nhận quà / trúng thưởng", investment: "Đầu tư / sinh lời", other: "Hình thức khác" };
+  function rnd(n) { var a = new Uint8Array(n); crypto.getRandomValues(a); var s = ""; for (var i = 0; i < n; i++) s += ALPHA[a[i] % 32]; return s; }
+  function normCode(v) { var c = String(v || "").toUpperCase().replace(/[^A-Z0-9]/g, ""); if (c.indexOf("LCS") === 0) c = c.slice(3); return /^[A-HJ-NP-Z2-9]{12}$/.test(c) ? "LCS-" + c.slice(0, 4) + "-" + c.slice(4, 8) + "-" + c.slice(8) : null; }
+  async function sha(t) { needCrypto(); var b = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t))); var h = ""; for (var i = 0; i < b.length; i++) h += ("0" + b[i].toString(16)).slice(-2); return h; }
+  function rlist() { var a = read(RK, []); return Array.isArray(a) ? a.filter(function (r) { return r && typeof r.id === "string" && STATUS[r.status] && Array.isArray(r.events); }) : []; }
+  function pubR(r) {
+    var last = r.events.slice().reverse().find(function (e) { return e.to_status === r.status; });
+    return { reference: r.reference, status: r.status, category: r.category, indicator_type: r.indicator_type, created_at: r.created_at, updated_at: r.updated_at,
+      reason: r.status === "REJECTED" && last ? last.reason : null, steps: r.events.map(function (e) { return { status: e.to_status, at: e.created_at }; }) };
+  }
+  var reports = Object.freeze({
+    STATUS: STATUS, CATS: CATS, normCode: normCode,
+    submit: async function (p) {
+      await readyP;
+      if (SERVER) return call("POST", "reports", { category: p.category, indicator_type: p.indicator_type, indicator: p.indicator, description: p.description, ward: p.ward });
+      var now = new Date(), iso = now.toISOString(), code = normCode(rnd(12)), list = rlist(), me = session();
+      var dup = list.some(function (x) { return String(x.indicator || "").toLowerCase() === String(p.indicator).toLowerCase(); });
+      var r = { id: "f02-" + Date.now().toString(36) + "-" + rnd(4).toLowerCase(), reference: code, code_hash: await sha(code), owner: me ? me.username : null,
+        category: p.category, indicator_type: p.indicator_type, indicator: p.indicator, description: p.description, ward: p.ward, province: "Đồng Nai", status: "PENDING_VERIFICATION", possible_duplicate: dup, created_at: iso, updated_at: iso, has_evidence: false, events: [] };
+      list.unshift(r);
+      if (!write(RK, list.slice(0, 300))) throw new Error("Trình duyệt đang chặn lưu dữ liệu nên chưa lưu được báo cáo.");
+      return { reference: r.reference, code: code, status: r.status, possible_duplicate: dup, owner: r.owner };
+    },
+    lookup: async function (codeIn) {
+      await readyP;
+      var code = normCode(codeIn); if (!code) throw new Error("Mã tra cứu gồm 12 ký tự sau chữ LCS, ví dụ LCS-AB2C-D3EF-GH4K.");
+      if (SERVER) return (await call("POST", "lookup", { code: code })).report;
+      var h = await sha(code), r = rlist().find(function (x) { return x.code_hash === h; });
+      if (!r) throw new Error("Không tìm thấy báo cáo với mã này trên trình duyệt này. Kiểm tra lại từng ký tự.");
+      return pubR(r);
+    },
+    mine: async function () {
+      await readyP; var me = session(); if (!me) return [];
+      if (SERVER) return (await call("GET", "myreports")).reports;
+      return rlist().filter(function (x) { return x.owner === me.username; }).map(pubR);
+    },
+    reviewList: async function () {
+      await readyP;
+      if (SERVER) return (await call("GET", "review/reports")).reports;
+      return rlist().map(function (r) { var x = Object.assign({}, r); delete x.code_hash; x.has_account = !!x.owner; x.reporter = x.owner ? { username: x.owner, name: (read(KA, {})[x.owner] || {}).name || x.owner } : null; delete x.owner; return x; });
+    },
+    decide: async function (id, b) {
+      await readyP;
+      if (SERVER) return (await call("POST", "review/decision", { id: id, target: b.target, reason: b.reason, evidence_basis: b.evidence_basis, evidence_checked: !!b.evidence_checked, expected_updated_at: b.expected_updated_at })).report;
+      var list = rlist(), r = list.find(function (x) { return x.id === id; }); if (!r) throw new Error("Không tìm thấy hồ sơ.");
+      var t = new Date().toISOString(), me = session();
+      r.events.push({ actor: me ? me.username : "reviewer-demo", from_status: r.status, to_status: b.target, reason: b.reason, evidence_basis: b.evidence_basis || "", created_at: t });
+      r.status = b.target; r.updated_at = t;
+      if (!write(RK, list)) throw new Error("Trình duyệt đang chặn lưu dữ liệu.");
+      var x = Object.assign({}, r); delete x.code_hash; x.has_account = !!x.owner; x.reporter = x.owner ? { username: x.owner, name: (read(KA, {})[x.owner] || {}).name || x.owner } : null; delete x.owner; return x;
+    }
+  });
+  function mode() { return SERVER ? "server" : "local"; }
+  function chip() {
+    var s = session();
+    document.querySelectorAll("[data-lcs-acct]").forEach(function (a) {
+      var t = a.querySelector(".lcs-acct-t");
+      if (t) t.textContent = s ? s.name : "Tài khoản";
+      a.classList.toggle("in", !!s);
+      a.setAttribute("aria-label", s ? "Tài khoản: " + s.name + " (" + (ROLE[s.role] || "") + ")" : "Đăng nhập hoặc tạo tài khoản");
+      a.title = s ? s.name + " · " + (ROLE[s.role] || "") : "Tài khoản: đăng nhập hoặc tạo mới";
+    });
+  }
+  function changed() { chip(); try { window.dispatchEvent(new CustomEvent("lcs:auth", { detail: session() })); } catch (e) {} }
+  window.addEventListener("storage", function (e) { if (!SERVER && (e.key === KS || e.key === KA)) changed(); });
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", chip); else chip();
+  var readyP = SERVER ? probe() : Promise.resolve();
+  window.LCS = Object.freeze({ session: session, login: login, register: register, logout: logout, contacts: contacts, saveContacts: saveContacts, mode: mode, reports: reports, ROLE: ROLE, SEED: SEED, DEMO_PW: DEMO_PW });
+})();
+</script>
+<style>
+.contact-acts{display:flex;gap:6px;flex-shrink:0}
+.contact-acts .mini{min-height:36px;padding:4px 10px;border-radius:9px;border:1px solid var(--line);background:white;color:var(--primary);font-weight:700;font-size:.82em}
+.contact-acts .mini:hover{background:var(--primary-soft)}
+.contact-acts .mini.danger{color:var(--lcs-red-dark)}.contact-acts .mini.danger:hover{background:var(--danger-soft)}
+.contact-acts .mini.armed{background:var(--danger);border-color:var(--danger);color:white}
+.empty .actions.two a.btn{text-decoration:none}
+.hotline{margin-top:14px;padding:12px 14px;border-radius:12px;border:1px solid var(--lcs-red-line);background:var(--danger-soft);color:var(--lcs-red-dark)}
+.hotline strong{display:flex;align-items:center;gap:8px}.hotline .ic{width:19px;height:19px}.hotline p{margin-top:4px;color:var(--text)}.hotline a{color:var(--lcs-red-dark);font-weight:800}
+@media(max-width:520px){.contact{flex-wrap:wrap}.contact-acts{order:3;width:100%;justify-content:flex-end}}
+</style>
+</head>
+<body>
+<svg xmlns="http://www.w3.org/2000/svg" style="position:absolute;width:0;height:0;overflow:hidden" aria-hidden="true"><defs>
+<symbol id="icon-home" viewBox="0 0 24 24"><path d="m3 11 9-8 9 8v10H3V11Zm6 10v-7h6v7"/></symbol>
+<symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-11V5l-8-3-8 3v6c0 7 8 11 8 11z"/><path d="m9 12 2 2 4-4"/></symbol>
+<symbol id="i-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M16 3a4 4 0 0 1 0 8M22 21v-2a4 4 0 0 0-3-3.87"/><circle cx="9" cy="7" r="4"/></symbol>
+<symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21v-2a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v2"/></symbol>
+<symbol id="i-phone" viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72l.45 2.9a2 2 0 0 1-.57 2.11L7.72 10a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.57l2.9.45A2 2 0 0 1 22 16.92z"/></symbol>
+<symbol id="i-message" viewBox="0 0 24 24"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/><path d="M8 12h8"/></symbol>
+<symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="13" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></symbol>
+<symbol id="i-arrow" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+<symbol id="i-back" viewBox="0 0 24 24"><path d="m12 19-7-7 7-7M5 12h14"/></symbol>
+<symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+<symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.3 3.9 2.6 17.5A2 2 0 0 0 4.3 20h15.4a2 2 0 0 0 1.7-2.5L13.7 3.9a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01"/></symbol>
+<symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 7h.01"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></symbol>
+<symbol id="i-lock" viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"/></symbol>
+<symbol id="i-text" viewBox="0 0 24 24"><path d="M3 6V3h12v3M9 3v18M5 21h8M15 12l3-6 3 6M16 10h4"/></symbol>
+<symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="8" cy="6" r="2" fill="white"/><circle cx="15" cy="12" r="2" fill="white"/><circle cx="9" cy="18" r="2" fill="white"/></symbol>
+<symbol id="i-external" viewBox="0 0 24 24"><path d="M13 5h6v6M19 5l-9 9M19 13v6H5V5h6"/></symbol>
+<symbol id="i-wifi" viewBox="0 0 24 24"><path d="m3 3 18 18M8.5 16.5a5 5 0 0 1 4.5-1M2 8.5a15 15 0 0 1 4.2-2.8M12 4a15 15 0 0 1 10 4.5M16.8 12.2A8 8 0 0 1 19 13M12 20h.01"/></symbol>
+</defs></svg>
+<!-- LCS-HEADER:START (giống hệt nhau ở mọi trang, chỉ khác mục đang chọn) -->
+<div class="lcs-hdr" role="banner"><div class="lcs-hdr-in">
+  <a href="index.html" class="lcs-logo" aria-label="Lá Chắn Số - về trang chủ"><span class="lcs-mark"><svg class="lcs-emblem" viewBox="0 0 200 104" aria-hidden="true" focusable="false"><rect x="3" y="3" width="194" height="42" fill="#003d82" stroke="#fff" stroke-width="5"/><text x="100" y="31" text-anchor="middle" font-family="Be Vietnam Pro,Arial,sans-serif" font-weight="800" font-size="17" fill="#fff" textLength="172" lengthAdjust="spacingAndGlyphs">THANH NIÊN VIỆT NAM</text><path d="M24 50H176L100 101Z" fill="#e5373a" stroke="#fff" stroke-width="5" stroke-linejoin="miter"/><path d="M100 56l4.4 9.6 10.4 1.2-7.7 7.1 2.1 10.3L100 78.8l-9.2 4.4 2.1-10.3-7.7-7.1 10.4-1.2Z" fill="#fad550"/></svg></span><span class="lcs-brand">LÁ CHẮN <span>SỐ</span><small>Vì một cộng đồng an toàn</small></span></a>
+  <nav class="lcs-nav" aria-label="Chức năng"><a href="index.html">Trang chủ</a><a href="quick-check.html">Kiểm tra</a><a href="message-check.html">Tin nhắn</a><a href="learn.html">Học 1 phút</a><a href="quiz.html">Quiz</a><a href="ask-family.html" aria-current="page">Người thân</a><a href="report.html">Báo cáo</a></nav>
+  <span class="lcs-right"><a class="lcs-home" href="index.html" aria-label="Trang chủ"><svg class="lcs-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 11 9-8 9 8v10H3V11Zm6 10v-7h6v7"/></svg>Trang chủ</a><a class="lcs-acct" href="account.html" data-lcs-acct><svg class="lcs-ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg><span class="lcs-acct-t">Tài khoản</span></a><span data-lcs-fs></span></span>
+</div></div>
+<!-- LCS-HEADER:END -->
+<main class="layout"><aside class="intro" aria-label="Giới thiệu chức năng"><span class="tag">HỖ TRỢ TỪ NGƯỜI THÂN</span><h2>Đừng xử lý<br><em>một mình</em>.</h2><p>Khi một cuộc gọi hay tin nhắn khiến bạn lo lắng, hãy dừng lại và hỏi người bạn tin tưởng.</p><div class="hero-art" aria-hidden="true"><div class="hero-orbit"></div><div class="hero-orbit"></div><div class="hero-core"><svg class="ic"><use href="#i-users"/></svg></div><div class="hero-mini a"><svg class="ic"><use href="#i-message"/></svg> Hỏi ý kiến</div><div class="hero-mini b"><svg class="ic"><use href="#i-shield"/></svg> Xác minh</div></div><div class="rail"><div class="rail-item"><span class="rail-num">01</span><span>Chọn người thân tin cậy</span></div><div class="rail-item"><span class="rail-num">02</span><span>Xem lại trước khi chia sẻ</span></div><div class="rail-item"><span class="rail-num">03</span><span>Liên hệ để cùng xác minh</span></div></div><div class="intro-foot"><svg class="ic" aria-hidden="true"><use href="#i-lock"/></svg> Không tự động gọi hoặc gửi tin. Bạn luôn có quyền quyết định.</div></aside>
+<section class="workspace" aria-label="Hỏi người thân"><div class="workspace-meta"><span class="mode" id="modeLabel">Hỏi người thân</span><span class="small muted" id="metaRight">Hỏi người thân</span></div><div id="acctNote" class="acct-note" role="note"></div><div class="panel"><nav class="stepper" id="stepper" aria-label="Tiến độ"></nav><div id="offlineBanner" class="notice warning" hidden><svg class="ic" aria-hidden="true"><use href="#i-wifi"/></svg><p class="small">Mất kết nối Internet. Gọi điện hoặc SMS vẫn có thể hoạt động nếu có sóng di động. Bạn có thể sao chép lời nhắn.</p></div><div id="screen"></div></div><details class="demo-tools"><summary><svg class="ic" aria-hidden="true"><use href="#i-settings"/></svg> Tình huống kiểm thử</summary><div class="demo-buttons"><button class="btn neutral" id="demoRisk">Mô phỏng mở từ kết quả nghi ngờ</button></div><p class="small muted">Các nút này đặt lại phiên thử nghiệm. Không có dữ liệu nào được gửi ra ngoài.</p></details><footer class="footer"><span>Người thân lưu theo tài khoản, chỉ dùng khi bạn bấm Gọi hoặc SMS.</span><span>Design System 2.0 · MVP cục bộ</span></footer></section></main><div id="announce" class="live-status" role="status" aria-live="polite"></div>
+<script>
+'use strict';
+const DEFAULT_MESSAGE='Mình vừa nhận được một cuộc gọi hoặc tin nhắn đáng ngờ. Bạn có thể kiểm tra giúp mình trước khi mình thực hiện bất kỳ yêu cầu nào không?';
+// Người thân chỉ dùng khi đã đăng nhập (lưu theo tài khoản). Chưa đăng nhập: không có liên hệ mẫu, chỉ gợi ý đăng nhập và số khẩn cấp.
+const MAX_CONTACTS=10;
+const loggedIn=()=>!!(window.LCS&&LCS.session());
+const labels={CONDITIONALLY_SAFE:'An toàn có điều kiện',SUSPICIOUS:'Nghi ngờ',DANGEROUS:'Nguy hiểm',INSUFFICIENT_EVIDENCE:'Chưa đủ căn cứ'};
+const actionLabels={sms:'Gửi tin nhắn SMS',call:'Gọi điện',copy:'Sao chép lời nhắn'};
+const state={armed:null,contacts:[],selected:null,screen:'choose',action:null,draft:DEFAULT_MESSAGE,context:null,includeContext:false,result:null,contactOrigin:'choose',large:false,contactForm:null,contactError:null,reviewError:null};
+const $=id=>document.getElementById(id);
+const icon=(name,cls='')=>`<svg class="ic ${cls}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
+const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function normalizePhone(value){const s=String(value??'').trim();if(!/^[+0-9\s()-]+$/.test(s))return null;const n=s.replace(/[\s()-]/g,'');if(/^0[35789]\d{8}$/.test(n))return '+84'+n.slice(1);if(/^\+84[35789]\d{8}$/.test(n))return n;return null}
+function maskPhone(p){return p?`${p.slice(0,5)} ••• ••${p.slice(-2)}`:'09xx xxx xxx (mẫu)'}
+function selectedContact(){return state.contacts.find(c=>c.id===state.selected)||null}
+function announce(message){$('announce').textContent=message}
+function makeMessage(){let s=state.draft.trim();if(state.includeContext&&state.context)s+='\n\nThông tin tham khảo từ Lá Chắn Số: '+labels[state.context.assessment]+'. Đây là đánh giá rủi ro, chưa phải kết luận pháp lý.';return s}
+function validDraft(){return state.draft.trim().length>=5&&state.draft.length<=500}
+function getRiskClass(){return state.context?.assessment==='DANGEROUS'?'danger':state.context?.assessment==='CONDITIONALLY_SAFE'?'safe':''}
+function setScreen(name,focus=true){state.screen=name;state.reviewError=null;render(focus)}
+function setDemo(type){loadContacts(loggedIn()?LCS.contacts():[]);state.armed=null;state.draft=DEFAULT_MESSAGE;state.includeContext=false;state.context=type==='risk'?{assessment:'SUSPICIOUS',indicator_type:'phone'}:null;state.result=null;state.contactForm=null;state.contactError=null;setScreen('choose')}
+function riskBlock(){if(!state.context)return '';return `<div class="risk-context ${getRiskClass()}"><strong>${icon('info')} Kết quả tham khảo: ${esc(labels[state.context.assessment])}</strong><p class="small">Không chia sẻ số điện thoại, đường dẫn hay tài khoản đáng ngờ tự động. Bạn có thể thêm nhãn đánh giá vào lời nhắn.</p><label class="checkbox-row"><input type="checkbox" id="includeContext" ${state.includeContext?'checked':''}><span class="small">Kèm nhãn đánh giá (không kèm chỉ báo gốc)</span></label></div>`}
+function notice(type,heading,text,i='info'){return `<div class="notice ${type}">${icon(i)}<div><strong>${heading}</strong><p class="small">${text}</p></div></div>`}
+function title(eyebrow,heading,sub=''){return `<div class="title-block"><div class="eyebrow">${eyebrow}</div><h1 id="screenTitle" tabindex="-1">${heading}</h1>${sub?`<p>${sub}</p>`:''}</div>`}
+function button(id,label,i='',cls=''){return `<button type="button" id="${id}" class="btn ${cls}">${i?icon(i):''}${label}</button>`}
+function actionButton(id,action,sub,ic,primary=false){return `<button type="button" class="choice-action ${primary?'primary':''}" id="${id}"><span class="action-icon">${icon(ic)}</span><span class="action-body">${action}<small>${sub}</small></span>${icon('arrow')}</button>`}
+function renderChoose(){const has=state.contacts.length>0;const c=selectedContact();return title('Chọn liên hệ','Hỏi người thân','Bạn không cần quyết định một mình. Hãy nhờ người tin cậy kiểm tra giúp.')+notice('warning','Dừng lại trước khi chuyển tiền','Không cung cấp OTP, mật khẩu hoặc thông tin ngân hàng khi chưa xác minh.','alert')+`<div class="section"><div class="section-title"><h2>Người thân tin cậy</h2>${has&&state.contacts.length<MAX_CONTACTS?`<button id="addContact" class="text-btn">${icon('plus')} Thêm</button>`:''}</div>${!loggedIn()?loginEmpty():has?`<div class="contacts" role="group" aria-label="Chọn người thân">${state.contacts.map((x,i)=>`<label class="contact"><span class="avatar">${icon('user','lg')}</span><span class="contact-info"><span class="contact-name">${esc(x.name)}</span><span class="contact-meta" style="display:block">${esc(maskPhone(x.phone))}${x.preferred?' · Mặc định':''}</span></span><span class="contact-acts"><button type="button" class="mini" data-edit="${i}" aria-label="Sửa ${esc(x.name)}">Sửa</button><button type="button" class="mini danger${state.armed===i?' armed':''}" data-del="${i}" aria-label="${state.armed===i?'Bấm lần nữa để xóa ':'Xóa '}${esc(x.name)}">${state.armed===i?'Bấm lần nữa để xóa':'Xóa'}</button></span><input type="radio" name="trusted" value="${i}" aria-label="${esc(x.name)}" ${state.selected===x.id?'checked':''}></label>`).join('')}</div>${state.flash?`<p class="small" role="status" style="margin-top:8px;color:var(--success-text);font-weight:650">${esc(state.flash)}</p>`:''}`:`<div class="empty"><span class="avatar">${icon('users','lg')}</span><h3>Chưa có người thân tin cậy</h3><p class="muted">Thêm một người bạn tin tưởng để gọi hoặc nhắn tin. Danh sách được lưu vào tài khoản của bạn.</p>${button('addContact','Thêm người thân','plus')}</div>`}</div><div class="section"><h2>Chọn cách liên hệ</h2><div class="actions">${has?actionButton('smsAction','Gửi tin nhắn SMS','Mở ứng dụng tin nhắn','message',true)+actionButton('callAction','Gọi điện','Mở bàn phím gọi điện','phone'):''}${actionButton('copyAction','Sao chép lời nhắn','Dán vào ứng dụng nhắn tin bạn dùng','copy',!has)}</div></div><div class="section"><div class="section-title"><h2>Lời nhắn soạn sẵn</h2><button id="resetMessage" class="text-btn">Đặt lại</button></div><label for="draft" class="live-status">Lời nhắn, có thể chỉnh sửa</label><textarea id="draft" class="input" maxlength="500" aria-describedby="draftHelp">${esc(state.draft)}</textarea><div class="draft-tools"><span id="draftHelp" class="small muted">Bạn có thể sửa trước khi gửi.</span><span id="count" class="small muted">${state.draft.length}/500</span></div><p class="field-error" id="draftError" role="alert" hidden></p>${riskBlock()}</div><div class="helper">${notice('','Bạn luôn kiểm soát dữ liệu','Không tự động gửi tin hoặc gọi điện. '+(loggedIn()?'Người thân được lưu theo tài khoản của bạn, số điện thoại được mã hóa trên máy chủ.':'Chưa đăng nhập nên không lưu người thân nào.'),'lock')}</div>${hotlines()}`}
+function loginEmpty(){return `<div class="empty"><span class="avatar">${icon('lock','lg')}</span><h3>Đăng nhập để dùng người thân tin cậy</h3><p class="muted">Danh sách người thân được lưu riêng cho từng tài khoản. Chưa đăng nhập, bạn vẫn có thể sao chép lời nhắn bên dưới hoặc gọi số khẩn cấp.</p><div class="actions two" style="width:100%"><a class="btn" href="account.html?next=F03">${icon('lock')} Đăng nhập</a><a class="btn outline" href="account.html?next=F03&tab=register">Tạo tài khoản</a></div></div>`}
+function hotlines(){return `<div class="hotline"><strong>${icon('phone')} Số khẩn cấp</strong><p class="small">Bị đe dọa, bị ép chuyển tiền hoặc đã mất tiền: gọi <a href="tel:113">113</a> (Công an), sau đó gọi tổng đài ghi trên mặt sau thẻ ngân hàng của bạn để yêu cầu khóa giao dịch.</p></div>`}
+function renderContact(){const f=state.contactForm||{name:'',phone:''};const edit=Number.isInteger(f.index);return `<button id="backContact" class="text-btn">${icon('back')} Quay lại</button>`+title(edit?'Sửa người thân':'Thêm người thân',edit?'Sửa người thân':'Thêm người thân','Lưu vào tài khoản '+esc(LCS.session()?.name||'')+'. Bạn cũng quản lý danh sách ở trang Người thân tin cậy.')+`<form id="contactForm" novalidate><div class="field"><label class="field-label" for="contactName">Tên hoặc cách gọi *</label><input id="contactName" class="input" maxlength="50" autocomplete="off" value="${esc(f.name)}" placeholder="Ví dụ: Con gái, Anh trai" aria-describedby="nameError"><p class="field-error" id="nameError" role="alert" hidden></p></div><div class="field"><label class="field-label" for="contactPhone">Số điện thoại di động *</label><input id="contactPhone" class="input" maxlength="24" type="tel" inputmode="tel" autocomplete="off" value="${esc(f.phone)}" placeholder="09xx xxx xxx" aria-describedby="phoneHelp phoneError"><p class="small muted" id="phoneHelp">Nhập số di động Việt Nam 10 chữ số hoặc +84.</p><p class="field-error" id="phoneError" role="alert" hidden></p></div>${notice('','Lưu theo tài khoản','Không đọc danh bạ điện thoại. Số được mã hóa khi lưu trên máy chủ. Hãy hỏi ý kiến người thân trước khi lưu số của họ.','lock')}<div class="actions"><button type="submit" class="btn">${icon('check')} ${edit?'Lưu thay đổi':'Thêm và chọn'}</button>${button('cancelContact','Hủy','','neutral')}</div></form>`}
+function renderReview(){const c=selectedContact();const isCopy=state.action==='copy',isCall=state.action==='call';const a=state.action;const demo=!!c?.demo&&!isCopy;const heading=isCopy?'Kiểm tra lời nhắn':isCall?'Xác nhận gọi điện':'Xác nhận lời nhắn';return `<button id="backReview" class="text-btn">${icon('back')} Quay lại</button>`+title('Xem lại',heading,'Kiểm tra trước khi mở ứng dụng khác hoặc sao chép.')+`<div class="summary">${!isCopy?`<div class="summary-row"><div class="small muted">Người nhận</div><div class="value">${esc(c?.name||'Chưa có liên hệ')}</div><div class="small muted">${esc(c?.phone||'09xx xxx xxx (mẫu)')}</div></div>`:''}<div class="summary-row"><div class="small muted">Hành động</div><div class="value">${esc(actionLabels[a])}</div></div>${!isCall?`<div class="summary-row"><div class="small muted">Nội dung lời nhắn</div><div class="message" id="reviewMessage">${esc(makeMessage())}</div></div>`:''}</div>`+(demo?notice('warning','Chế độ minh họa','Sẽ không gọi hoặc mở ứng dụng SMS vì đây là liên hệ mẫu.','alert'):isCopy?notice('','Chỉ sao chép khi bạn đồng ý','Lời nhắn sẽ được đưa vào bộ nhớ tạm nếu trình duyệt cho phép.','lock'):notice('','Bạn sẽ xác nhận trong ứng dụng điện thoại','Lá Chắn Số chỉ yêu cầu mở '+(isCall?'bàn phím gọi điện':'ứng dụng SMS')+', không thực hiện cuộc gọi hoặc gửi tin thay bạn.','lock'))+`<div class="actions">${button('confirmAction',demo?(isCall?'Mô phỏng mở cuộc gọi':'Mô phỏng mở SMS'):isCopy?'Xác nhận sao chép':isCall?'Mở bàn phím gọi':'Mở SMS',isCopy?'copy':isCall?'phone':'message')}${button('editReview',isCall?'Đổi người nhận':'Chỉnh sửa lời nhắn','','outline')}</div><p id="reviewError" class="field-error" role="alert" hidden></p>`}
+function renderResult(){const r=state.result||{};let heading,sub,note,ico='external';if(r.kind==='demo'){heading='Đã mô phỏng yêu cầu mở ứng dụng';sub='Đây là liên hệ mẫu; không có SMS hoặc cuộc gọi nào được thực hiện.';note=notice('','Nếu sử dụng số thật','Điện thoại sẽ mở ứng dụng tương ứng để bạn xác nhận thao tác.','info')}else if(r.kind==='copy-ok'){heading='Đã sao chép lời nhắn';sub='Bạn có thể dán lời nhắn vào ứng dụng bạn thường sử dụng.';ico='check';note=notice('success','Sao chép thành công','Lá Chắn Số không tự gửi nội dung cho bất kỳ ai.','check')}else if(r.kind==='manual-copy'){heading='Sao chép thủ công';sub='Trình duyệt không cấp quyền sao chép tự động. Hãy chọn và sao chép nội dung bên dưới.';ico='copy';note=notice('warning','Chưa sao chép vào bộ nhớ tạm','Bạn vẫn có thể tự chọn nội dung và sao chép.','alert')}else if(r.kind==='request-error'){heading='Không thể yêu cầu mở ứng dụng';sub='Thiết bị hoặc trình duyệt có thể không hỗ trợ. Hãy thử cách khác.';note=notice('error','Chưa thực hiện cuộc gọi hoặc gửi tin','Sao chép lời nhắn hoặc thử lại từ điện thoại.','alert')}else{heading='Đã yêu cầu mở '+(r.action==='call'?'bàn phím gọi':'ứng dụng SMS');sub='Nếu ứng dụng mở, hãy kiểm tra người nhận và tự xác nhận thao tác.';note=notice('warning','Chưa xác nhận đã gửi hoặc đã gọi','Lá Chắn Số không thể biết ứng dụng bên ngoài đã mở, tin nhắn đã gửi hay cuộc gọi đã kết nối.','alert')}
+return `<div class="result-icon ${r.kind==='copy-ok'?'success':''}">${icon(ico,'xl')}</div>`+title('Hỗ trợ tiếp theo',heading,sub)+note+(r.kind==='manual-copy'?`<div class="manual-copy"><label class="field-label" for="manualText">Nội dung cần sao chép</label><textarea class="input" id="manualText" readonly>${esc(makeMessage())}</textarea>${button('selectManual','Chọn toàn bộ nội dung','copy','outline')}</div>`:'')+`<div class="section"><h2>Nếu chưa liên lạc được</h2><p class="muted" style="margin-top:6px">Hãy tạm dừng giao dịch, đừng bấm đường dẫn lạ. Có thể thử người thân khác hoặc xác minh qua kênh chính thức.</p><div class="actions">${button('retryContact','Quay lại chọn cách liên hệ','back')}${r.action!=='copy'?button('fallbackCopy','Sao chép lời nhắn','copy','outline'):''}${button('finish','Kết thúc và xóa phiên','','neutral')}</div></div>`}
+function render(focus=false){const stage=state.screen==='review'?2:state.screen==='result'?3:1;$('stepper').innerHTML=['Chọn liên hệ','Xem lại','Liên hệ'].map((label,i)=>{const n=i+1;return `${i?'<div class="step-line"></div>':''}<div class="step ${n===stage?'current':n<stage?'done':''}" ${n===stage?'aria-current="step"':''}><span class="step-n">${n<stage?'✓':n}</span><span>${label}</span></div>`}).join('');$('modeLabel').textContent=!loggedIn()?'Chưa đăng nhập':state.contacts.length?'Người thân của bạn':'Chưa có liên hệ';$('modeLabel').classList.toggle('demo',!loggedIn());$('screen').innerHTML=state.screen==='choose'?renderChoose():state.screen==='contact'?renderContact():state.screen==='review'?renderReview():renderResult();bind();if(focus){$('screenTitle')?.focus({preventScroll:true});window.scrollTo(0,0);announce($('screenTitle')?.textContent||'')}}
+function on(id,fn){const e=$(id);if(e)e.addEventListener('click',fn)}
+function openContact(index){if(!loggedIn()){location.href='account.html?next=F03';return}if(!Number.isInteger(index)&&LCS.contacts().length>=MAX_CONTACTS){state.flash='Đã đủ '+MAX_CONTACTS+' người thân. Xóa bớt để thêm người mới.';render();return}const cur=Number.isInteger(index)?state.contacts[index]:null;state.armed=null;state.flash='';const event=new CustomEvent('lcs:f03-request-contact-setup',{cancelable:true,detail:{returnTo:'/f03'}});if(!window.dispatchEvent(event))return;state.contactForm=cur?{name:cur.name,phone:'0'+cur.phone.slice(3),index}:{name:'',phone:''};setScreen('contact')}
+function fieldError(id,message){const e=$(id);e.textContent=message;e.hidden=!message}
+function showInputError(id,errorId,message){const el=$(id);el.setAttribute('aria-invalid',message?'true':'false');fieldError(errorId,message)}
+function chooseAction(action){if(action!=='copy'&&!selectedContact()){openContact();return}if(action!=='call'&&!validDraft()){showInputError('draft','draftError','Nhập lời nhắn từ 5 đến 500 ký tự.');$('draft').focus();return}state.action=action;setScreen('review')}
+function contactSubmit(event){event.preventDefault();if(!loggedIn()){location.href='account.html?next=F03';return}const f=state.contactForm||{};const edit=Number.isInteger(f.index);const editing=edit?state.contacts[f.index]:null;const name=$('contactName').value.trim(),phone=$('contactPhone').value;const n=normalizePhone(phone);const nameErr=name.length<1||name.length>50?'Nhập tên hoặc cách gọi (1–50 ký tự).':'';const phoneErr=!n?'Nhập số di động Việt Nam hợp lệ (10 số hoặc +84).':state.contacts.some(c=>c.phone===n&&c!==editing)?'Số điện thoại này đã có trong danh sách.':'';showInputError('contactName','nameError',nameErr);showInputError('contactPhone','phoneError',phoneErr);if(nameErr||phoneErr){$(nameErr?'contactName':'contactPhone').focus();return}
+  const list=LCS.contacts();
+  if(editing){const k=list.findIndex(x=>normalizePhone(x.phone)===editing.phone);if(k<0){state.contactForm=null;setScreen('choose');return}list[k]={...list[k],name,phone:n}}
+  else{if(list.length>=MAX_CONTACTS){showInputError('contactPhone','phoneError','Đã đủ '+MAX_CONTACTS+' người thân.');return}list.push({name,phone:n,preferred:!list.length})}
+  LCS.saveContacts(list);loadContacts(LCS.contacts());state.selected=(state.contacts.find(c=>c.phone===n)||{}).id||state.selected;state.flash=edit?'Đã lưu thay đổi cho '+name+'.':'Đã thêm '+name+'.';state.contactForm=null;setScreen('choose')}
+function deleteContact(i){const c=state.contacts[i];if(!c||!loggedIn())return;if(state.armed!==i){state.armed=i;state.flash='';render();document.querySelector('[data-del="'+i+'"]')?.focus();return}
+  const list=LCS.contacts().filter(x=>normalizePhone(x.phone)!==c.phone);if(list.length&&!list.some(x=>x.preferred))list[0].preferred=true;LCS.saveContacts(list);state.armed=null;loadContacts(LCS.contacts());state.flash='Đã xóa '+c.name+'.';render();announce(state.flash)}
+function buildSmsUri(phone,message,ua=navigator.userAgent){const n=normalizePhone(phone);if(!n)throw new Error('INVALID_PHONE');return 'sms:'+n+(/iPhone|iPad|iPod/i.test(ua)?'&body=':'?body=')+encodeURIComponent(message)}
+function buildTelUri(phone){const n=normalizePhone(phone);if(!n)throw new Error('INVALID_PHONE');return 'tel:'+n}
+function finishResult(kind,action){state.result={kind,action};setScreen('result')}
+async function confirmAction(){const a=state.action,c=selectedContact();if(a==='copy'){if(!validDraft()){setScreen('choose');return}const btn=$('confirmAction');btn.disabled=true;btn.textContent='Đang sao chép…';try{if(!navigator.clipboard?.writeText)throw new Error('UNSUPPORTED');await navigator.clipboard.writeText(makeMessage());if(state.screen==='review'&&state.action===a)finishResult('copy-ok',a)}catch{if(state.screen==='review'&&state.action===a)finishResult('manual-copy',a)}return}if(!c){setScreen('choose');return}if(c.demo){finishResult('demo',a);return}try{const uri=a==='call'?buildTelUri(c.phone):buildSmsUri(c.phone,makeMessage());const ev=new CustomEvent('lcs:f03-external-request',{cancelable:true,detail:{action:a,uri}});if(window.dispatchEvent(ev)){window.location.href=uri}finishResult('requested',a)}catch{finishResult('request-error',a)}}
+function bind(){if(state.screen==='choose'){document.querySelectorAll('input[name="trusted"]').forEach(e=>e.addEventListener('change',()=>{state.selected=state.contacts[Number(e.value)]?.id||null;state.armed=null}));document.querySelectorAll('[data-edit]').forEach(b=>b.addEventListener('click',ev=>{ev.preventDefault();openContact(Number(b.dataset.edit))}));document.querySelectorAll('[data-del]').forEach(b=>b.addEventListener('click',ev=>{ev.preventDefault();deleteContact(Number(b.dataset.del))}));on('addContact',()=>openContact());const d=$('draft');d.addEventListener('input',()=>{state.draft=d.value;$('count').textContent=d.value.length+'/500';if(validDraft())showInputError('draft','draftError','')});on('resetMessage',()=>{state.draft=DEFAULT_MESSAGE;d.value=state.draft;$('count').textContent=state.draft.length+'/500';showInputError('draft','draftError','');d.focus()});$('includeContext')?.addEventListener('change',e=>{state.includeContext=e.target.checked});on('smsAction',()=>chooseAction('sms'));on('callAction',()=>chooseAction('call'));on('copyAction',()=>chooseAction('copy'))}else if(state.screen==='contact'){$('contactForm').addEventListener('submit',contactSubmit);on('backContact',()=>setScreen('choose'));on('cancelContact',()=>setScreen('choose'));['contactName','contactPhone'].forEach((id,i)=>$(id).addEventListener('input',()=>showInputError(id,i?'phoneError':'nameError','')))}else if(state.screen==='review'){on('backReview',()=>setScreen('choose'));on('editReview',()=>{setScreen('choose',false);if(state.action!=='call')$('draft').focus();else document.querySelector('input[name="trusted"]:checked')?.focus()});on('confirmAction',confirmAction)}else{on('retryContact',()=>setScreen('choose'));on('fallbackCopy',()=>chooseAction('copy'));on('selectManual',()=>{$('manualText').focus();$('manualText').select();announce('Đã chọn nội dung; hãy sao chép bằng chức năng của thiết bị.')});on('finish',()=>{setDemo('empty');window.dispatchEvent(new CustomEvent('lcs:f03-finished',{detail:{returnTo:'home'}}))})}}
+function setTrustedContacts(items){if(!loadContacts(items))return false;setScreen('choose',false);return true}
+function loadContacts(items){if(!Array.isArray(items))return false;const prev=selectedContact()?.phone;const contacts=[];for(const x of items.slice(0,20)){if(!x||typeof x!=='object')continue;const name=typeof x.name==='string'?x.name.trim():'';const phone=normalizePhone(x.phone);if(!name||name.length>50||!phone||contacts.some(c=>c.phone===phone))continue;contacts.push({id:'imported-'+contacts.length,name,phone,preferred:x.preferred===true,demo:false})}state.contacts=contacts;state.selected=(contacts.find(c=>c.phone===prev)||contacts.find(c=>c.preferred)||contacts[0])?.id||null;return true}
+function setRiskContext(context){if(!context||typeof context!=='object'||!Object.prototype.hasOwnProperty.call(labels,context.assessment)){state.context=null;state.includeContext=false;setScreen('choose',false);return false}const kind=['phone','url','bank','message','other'].includes(context.indicator_type)?context.indicator_type:'other';state.context={assessment:context.assessment,indicator_type:kind};state.includeContext=false;setScreen('choose',false);return true}
+function updateOnline(){$('offlineBanner').hidden=navigator.onLine!==false}
+window.addEventListener('online',updateOnline);window.addEventListener('offline',updateOnline);$('demoRisk').addEventListener('click',()=>setDemo('risk'));
+window.LCSF03=Object.freeze({setTrustedContacts,setRiskContext,setLargeText(enabled){state.large=!!enabled;document.body.classList.toggle('large',state.large)},clearSession(){setDemo('empty')}});
+render();updateOnline();
+// Tài khoản (F13): người dân đã đăng nhập dùng danh sách người thân riêng của mình (F09)
+function lcsAccount(first){const box=$('acctNote');const a=window.LCS&&LCS.session();if(a){box.innerHTML='<span>Danh sách người thân của <strong>'+esc(a.name)+'</strong></span><a href="trusted-contacts.html">Quản lý người thân</a>';if(first||state.screen==='choose')setTrustedContacts(LCS.contacts())}else{box.innerHTML='<span>Đăng nhập để dùng danh sách người thân của bạn.</span><a href="account.html?next=F03">Đăng nhập</a>';loadContacts([]);state.armed=null;if(!first&&state.screen!=='choose')state.screen='choose';render()}}
+lcsAccount(true);window.addEventListener('lcs:auth',()=>lcsAccount(false));
+// Mở từ F08 hoặc F07: nhận nhãn đánh giá (không kèm chỉ báo gốc) và hiện nút quay lại kết quả
+(function(){try{const raw=sessionStorage.getItem('lcs_f03_context');if(!raw)return;sessionStorage.removeItem('lcs_f03_context');const ctx=JSON.parse(raw);
+  if(ctx&&setRiskContext(ctx)){const back=ctx.source==='F07'?'message-check.html?resume=1':'check-result.html';
+    $('metaRight').innerHTML='<a href="'+back+'" style="color:var(--primary);font-weight:700;text-decoration:none">← Quay lại kết quả</a>'}}catch{}})();
+</script><!-- LCS cỡ chữ: nút A− / A+ đồng bộ giữa các trang qua localStorage "lcs_font_scale" -->
+<link rel="stylesheet" href="css/font-size.css">
+<script>
+(function () {
+  var s = window.__lcsFont || { L: [0.9, 1, 1.15, 1.3], i: 1 };
+  var hosts = document.querySelectorAll("[data-lcs-fs]");
+  var outs = [], decs = [], incs = [];
+  hosts.forEach(function (host) {
+    host.innerHTML = '<div class="lcs-fs" role="group" aria-label="Cỡ chữ">' +
+      '<button type="button" data-d="-1" aria-label="Giảm cỡ chữ" title="Giảm cỡ chữ"><span class="lcs-fs-small">A</span>−</button>' +
+      '<output aria-live="polite"></output>' +
+      '<button type="button" data-d="1" aria-label="Tăng cỡ chữ" title="Tăng cỡ chữ">A+</button></div>';
+    outs.push(host.querySelector("output"));
+    decs.push(host.querySelector('[data-d="-1"]'));
+    incs.push(host.querySelector('[data-d="1"]'));
+    host.addEventListener("click", function (e) {
+      var b = e.target.closest("button[data-d]");
+      if (b) set(s.i + Number(b.dataset.d), true);
+    });
+  });
+  function layout() {
+    var w = window.innerWidth / s.L[s.i];
+    document.documentElement.classList.toggle("lcs-compact", w < 1140 && window.innerWidth >= 851);
+    document.documentElement.classList.toggle("lcs-narrow", w < 560);
+  }
+  function set(i, save) {
+    i = Math.max(0, Math.min(s.L.length - 1, i));
+    s.i = i;
+    document.documentElement.style.zoom = s.L[i];
+    outs.forEach(function (o) { o.textContent = Math.round(s.L[i] * 100) + "%"; });
+    decs.forEach(function (b) { b.disabled = i === 0; });
+    incs.forEach(function (b) { b.disabled = i === s.L.length - 1; });
+    if (save) { try { localStorage.setItem("lcs_font_scale", String(s.L[i])); } catch (e) {} }
+    layout();
+  }
+  // Đồng bộ ngay với các tab khác đang mở
+  window.addEventListener("storage", function (e) {
+    if (e.key === "lcs_font_scale") { var k = s.L.indexOf(parseFloat(e.newValue)); set(k >= 0 ? k : 1, false); }
+  });
+  window.addEventListener("resize", layout);
+  set(s.i, false);
+})();
+</script>
+</body></html>

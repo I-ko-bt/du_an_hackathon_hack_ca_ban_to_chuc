@@ -1,0 +1,619 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#00539c" /><link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <meta name="description" content="Lá Chắn Số. Kết quả kiểm tra, lý do và việc nên làm tiếp theo." />
+  <title>Lá Chắn Số | Kết quả và hành động</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@500;600;700&family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <!-- LCS cỡ chữ (dùng chung mọi trang): áp dụng trước khi vẽ trang để không bị nháy -->
+<script>(function(){var L=[0.9,1,1.15,1.3],i=1;try{var k=L.indexOf(parseFloat(localStorage.getItem("lcs_font_scale")));if(k>=0)i=k}catch(e){}window.__lcsFont={L:L,i:i};document.documentElement.style.zoom=L[i];})();</script>
+  <link rel="stylesheet" href="css/theme.css"><link rel="stylesheet" href="css/site.css">
+<link rel="stylesheet" href="css/typography.css"><link rel="stylesheet" href="css/header.css"><script id="lcs-auth">
+/* LCS tài khoản (dùng chung mọi trang).
+   Hai chế độ, tự chọn:
+   1) MÁY CHỦ (mở qua http://localhost sau khi chạy "node server.js"): tài khoản và người thân lưu ở file
+      data/accounts.lcsdb, mã hóa AES-256-GCM, mật khẩu băm scrypt. Trình duyệt chỉ giữ cookie phiên HttpOnly.
+   2) TRÌNH DUYỆT (mở trực tiếp file HTML): trình duyệt không cho trang ghi file ra ổ đĩa, nên tạm lưu trong
+      localStorage của máy này, mật khẩu băm PBKDF2-SHA256 có muối. Chỉ dùng để trình diễn. */
+(function () {
+  "use strict";
+  var KA = "lcs_accounts", KS = "lcs_session", KC = "lcs_srv_user", TTL = 8 * 3600 * 1000, ITER = 120000;
+  var ROLE = { citizen: "Người dân", volunteer: "Đội tình nguyện", reviewer: "Cán bộ kiểm duyệt" };
+  var SEED = [
+    { username: "canbo.demo", name: "Cán bộ Đoàn (demo)", role: "reviewer" },
+    { username: "tinhnguyen.demo", name: "Tình nguyện viên (demo)", role: "volunteer" }
+  ];
+  var DEMO_PW = "LaChanSo@2026";
+  var SERVER = /^https?:$/.test(location.protocol);   // sẽ tắt nếu không có máy chủ Lá Chắn Số
+  var srv = { user: null, contacts: [], ready: false };
+  try { srv.user = JSON.parse(sessionStorage.getItem(KC)) || null; } catch (e) {}
+  function read(k, d) { try { var v = JSON.parse(localStorage.getItem(k)); return v == null ? d : v; } catch (e) { return d; } }
+  function write(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } }
+  function b64(buf) { var s = "", a = new Uint8Array(buf); for (var i = 0; i < a.length; i++) s += String.fromCharCode(a[i]); return btoa(s); }
+  function unb64(s) { var b = atob(s), a = new Uint8Array(b.length); for (var i = 0; i < b.length; i++) a[i] = b.charCodeAt(i); return a; }
+  function salt() { var a = new Uint8Array(16); crypto.getRandomValues(a); return b64(a); }
+  function needCrypto() { if (!(window.crypto && crypto.subtle)) throw new Error("Trình duyệt chưa hỗ trợ mã hóa mật khẩu. Hãy mở bằng Chrome hoặc Edge bản mới."); }
+  async function hash(pw, s) {
+    needCrypto();
+    var key = await crypto.subtle.importKey("raw", new TextEncoder().encode(pw), "PBKDF2", false, ["deriveBits"]);
+    return b64(await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: unb64(s), iterations: ITER }, key, 256));
+  }
+  function same(a, b) { if (a.length !== b.length) return false; var r = 0; for (var i = 0; i < a.length; i++) r |= a.charCodeAt(i) ^ b.charCodeAt(i); return r === 0; }
+  var norm = function (u) { return String(u || "").trim().toLowerCase(); };
+  function pub(a) { return a ? { username: a.username, name: a.name, role: a.role, roleLabel: ROLE[a.role] || a.role, staff: a.role !== "citizen" } : null; }
+
+  /* ---------- Chế độ máy chủ ---------- */
+  async function call(method, route, data) {
+    var r;
+    try { r = await fetch("/api/lcs/" + route, { method: method, credentials: "same-origin", cache: "no-store", headers: data ? { "Content-Type": "application/json" } : {}, body: data ? JSON.stringify(data) : undefined }); }
+    catch (e) { throw new Error("Không kết nối được máy chủ Lá Chắn Số. Kiểm tra cửa sổ đang chạy server.js."); }
+    var j = null; try { j = await r.json(); } catch (e) {}
+    if (!r.ok) { var err = new Error((j && j.message) || "Máy chủ không xử lý được yêu cầu."); if (j && j.fields) err.fields = j.fields; err.status = r.status; throw err; }
+    return j || {};
+  }
+  function setSrv(user, contacts) {
+    srv.user = user || null; srv.contacts = Array.isArray(contacts) ? contacts : [];
+    try { user ? sessionStorage.setItem(KC, JSON.stringify(user)) : sessionStorage.removeItem(KC); } catch (e) {}
+  }
+  function probe() {
+    return fetch("/api/lcs/session", { credentials: "same-origin", cache: "no-store" }).then(function (r) {
+      if (!r.ok) throw 0; return r.json();
+    }).then(function (j) {
+      if (!j || j.mode !== "server") throw 0;
+      setSrv(j.user, j.contacts); srv.ready = true; changed();
+    }).catch(function () { SERVER = false; try { sessionStorage.removeItem(KC); } catch (e) {} changed(); });
+  }
+
+  /* ---------- Chế độ trình duyệt ---------- */
+  async function ensureSeed() {
+    var acc = read(KA, {}), ch = false;
+    for (var i = 0; i < SEED.length; i++) {
+      var s = SEED[i];
+      if (!acc[s.username]) { var sl = salt(); acc[s.username] = { username: s.username, name: s.name, role: s.role, salt: sl, hash: await hash(DEMO_PW, sl), seed: true, created: new Date().toISOString() }; ch = true; }
+    }
+    if (ch) write(KA, acc);
+  }
+  function localSession() {
+    var s = read(KS, null);
+    if (!s || !s.username || !(s.exp > Date.now())) return null;
+    return pub(read(KA, {})[s.username]);
+  }
+
+  /* ---------- Giao diện chung (giữ nguyên cho mọi trang) ---------- */
+  function session() { return SERVER ? (srv.user ? pub(srv.user) : null) : localSession(); }
+  async function login(username, pw) {
+    if (SERVER) { var j = await call("POST", "login", { username: username, password: pw }); setSrv(j.user, j.contacts); changed(); return session(); }
+    await ensureSeed();
+    var u = norm(username), a = read(KA, {})[u];
+    var h = a ? await hash(String(pw || ""), a.salt) : await hash(String(pw || ""), salt());
+    if (!a || !same(h, a.hash)) throw new Error("Tên đăng nhập hoặc mật khẩu không đúng.");
+    if (!write(KS, { username: u, exp: Date.now() + TTL })) throw new Error("Trình duyệt đang chặn lưu dữ liệu nên chưa đăng nhập được.");
+    changed(); return session();
+  }
+  async function register(o) {
+    if (SERVER) { var j = await call("POST", "register", { name: o.name, username: o.username, password: o.password, confirm: o.confirm }); setSrv(j.user, j.contacts); changed(); return session(); }
+    var name = String(o.name || "").trim(), u = norm(o.username), pw = String(o.password || ""), errors = {};
+    if (name.length < 2 || name.length > 50) errors.name = "Tên hiển thị từ 2 đến 50 ký tự.";
+    if (!/^[a-z0-9._]{4,30}$/.test(u)) errors.username = "Tên đăng nhập 4–30 ký tự, chỉ gồm chữ không dấu, số, dấu chấm hoặc gạch dưới.";
+    if (pw.length < 8 || !/[A-Za-z]/.test(pw) || !/\d/.test(pw)) errors.password = "Mật khẩu tối thiểu 8 ký tự, có cả chữ và số.";
+    if (pw !== String(o.confirm || "")) errors.confirm = "Mật khẩu nhập lại chưa khớp.";
+    await ensureSeed();
+    var acc = read(KA, {});
+    if (!errors.username && acc[u]) errors.username = "Tên đăng nhập này đã có người dùng.";
+    if (Object.keys(errors).length) { var e = new Error("Vui lòng kiểm tra lại thông tin."); e.fields = errors; throw e; }
+    var sl = salt();
+    acc[u] = { username: u, name: name, role: "citizen", salt: sl, hash: await hash(pw, sl), created: new Date().toISOString() };
+    if (!write(KA, acc)) throw new Error("Trình duyệt đang chặn lưu dữ liệu nên chưa tạo được tài khoản.");
+    write(KS, { username: u, exp: Date.now() + TTL });
+    changed(); return session();
+  }
+  function logout() {
+    if (SERVER) { setSrv(null, []); call("POST", "logout", {}).catch(function () {}); changed(); return; }
+    try { localStorage.removeItem(KS); } catch (e) {} changed();
+  }
+  function contacts() {
+    var s = session(); if (!s) return [];
+    if (SERVER) return srv.contacts.map(function (c) { return { name: c.name, phone: c.phone, preferred: !!c.preferred }; });
+    return read("lcs_contacts:" + s.username, []);
+  }
+  function saveContacts(list) {
+    var s = session(); if (!s) return false;
+    list = (list || []).slice(0, 10);
+    if (SERVER) {
+      srv.contacts = list.map(function (c) { return { name: c.name, phone: c.phone, preferred: !!c.preferred }; });
+      call("PUT", "contacts", { contacts: srv.contacts }).then(function (j) { srv.contacts = j.contacts || srv.contacts; })
+        .catch(function (e) { if (e.status === 401) { setSrv(null, []); changed(); } try { window.dispatchEvent(new CustomEvent("lcs:save-error", { detail: e.message })); } catch (x) {} });
+      return true;
+    }
+    return write("lcs_contacts:" + s.username, list);
+  }
+  /* ---------- Báo cáo: mã tra cứu, lịch sử theo tài khoản, kiểm duyệt ----------
+     Máy chủ: lưu trong data/accounts.lcsdb (mã hóa). Trình duyệt: localStorage "lcs_reports".
+     Chỉ lưu bản băm SHA-256 của mã tra cứu, không lưu mã gốc. */
+  var RK = "lcs_reports", ALPHA = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  var STATUS = { PENDING_VERIFICATION: "Chờ xác minh", UNDER_REVIEW: "Đang xác minh", VERIFIED: "Đã xác minh", INSUFFICIENT_EVIDENCE: "Chưa đủ căn cứ", REJECTED: "Bị từ chối" };
+  var CATS = { fake_authority: "Giả danh công an / ngân hàng", fake_job: "Việc nhẹ, lương cao", phishing: "Đường dẫn giả mạo", fake_gift: "Nhận quà / trúng thưởng", investment: "Đầu tư / sinh lời", other: "Hình thức khác" };
+  function rnd(n) { var a = new Uint8Array(n); crypto.getRandomValues(a); var s = ""; for (var i = 0; i < n; i++) s += ALPHA[a[i] % 32]; return s; }
+  function normCode(v) { var c = String(v || "").toUpperCase().replace(/[^A-Z0-9]/g, ""); if (c.indexOf("LCS") === 0) c = c.slice(3); return /^[A-HJ-NP-Z2-9]{12}$/.test(c) ? "LCS-" + c.slice(0, 4) + "-" + c.slice(4, 8) + "-" + c.slice(8) : null; }
+  async function sha(t) { needCrypto(); var b = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t))); var h = ""; for (var i = 0; i < b.length; i++) h += ("0" + b[i].toString(16)).slice(-2); return h; }
+  function rlist() { var a = read(RK, []); return Array.isArray(a) ? a.filter(function (r) { return r && typeof r.id === "string" && STATUS[r.status] && Array.isArray(r.events); }) : []; }
+  function pubR(r) {
+    var last = r.events.slice().reverse().find(function (e) { return e.to_status === r.status; });
+    return { reference: r.reference, status: r.status, category: r.category, indicator_type: r.indicator_type, created_at: r.created_at, updated_at: r.updated_at,
+      reason: r.status === "REJECTED" && last ? last.reason : null, steps: r.events.map(function (e) { return { status: e.to_status, at: e.created_at }; }) };
+  }
+  var reports = Object.freeze({
+    STATUS: STATUS, CATS: CATS, normCode: normCode,
+    submit: async function (p) {
+      await readyP;
+      if (SERVER) return call("POST", "reports", { category: p.category, indicator_type: p.indicator_type, indicator: p.indicator, description: p.description, ward: p.ward });
+      var now = new Date(), iso = now.toISOString(), code = normCode(rnd(12)), list = rlist(), me = session();
+      var dup = list.some(function (x) { return String(x.indicator || "").toLowerCase() === String(p.indicator).toLowerCase(); });
+      var r = { id: "f02-" + Date.now().toString(36) + "-" + rnd(4).toLowerCase(), reference: code, code_hash: await sha(code), owner: me ? me.username : null,
+        category: p.category, indicator_type: p.indicator_type, indicator: p.indicator, description: p.description, ward: p.ward, province: "Đồng Nai", status: "PENDING_VERIFICATION", possible_duplicate: dup, created_at: iso, updated_at: iso, has_evidence: false, events: [] };
+      list.unshift(r);
+      if (!write(RK, list.slice(0, 300))) throw new Error("Trình duyệt đang chặn lưu dữ liệu nên chưa lưu được báo cáo.");
+      return { reference: r.reference, code: code, status: r.status, possible_duplicate: dup, owner: r.owner };
+    },
+    lookup: async function (codeIn) {
+      await readyP;
+      var code = normCode(codeIn); if (!code) throw new Error("Mã tra cứu gồm 12 ký tự sau chữ LCS, ví dụ LCS-AB2C-D3EF-GH4K.");
+      if (SERVER) return (await call("POST", "lookup", { code: code })).report;
+      var h = await sha(code), r = rlist().find(function (x) { return x.code_hash === h; });
+      if (!r) throw new Error("Không tìm thấy báo cáo với mã này trên trình duyệt này. Kiểm tra lại từng ký tự.");
+      return pubR(r);
+    },
+    mine: async function () {
+      await readyP; var me = session(); if (!me) return [];
+      if (SERVER) return (await call("GET", "myreports")).reports;
+      return rlist().filter(function (x) { return x.owner === me.username; }).map(pubR);
+    },
+    reviewList: async function () {
+      await readyP;
+      if (SERVER) return (await call("GET", "review/reports")).reports;
+      return rlist().map(function (r) { var x = Object.assign({}, r); delete x.code_hash; x.has_account = !!x.owner; x.reporter = x.owner ? { username: x.owner, name: (read(KA, {})[x.owner] || {}).name || x.owner } : null; delete x.owner; return x; });
+    },
+    decide: async function (id, b) {
+      await readyP;
+      if (SERVER) return (await call("POST", "review/decision", { id: id, target: b.target, reason: b.reason, evidence_basis: b.evidence_basis, evidence_checked: !!b.evidence_checked, expected_updated_at: b.expected_updated_at })).report;
+      var list = rlist(), r = list.find(function (x) { return x.id === id; }); if (!r) throw new Error("Không tìm thấy hồ sơ.");
+      var t = new Date().toISOString(), me = session();
+      r.events.push({ actor: me ? me.username : "reviewer-demo", from_status: r.status, to_status: b.target, reason: b.reason, evidence_basis: b.evidence_basis || "", created_at: t });
+      r.status = b.target; r.updated_at = t;
+      if (!write(RK, list)) throw new Error("Trình duyệt đang chặn lưu dữ liệu.");
+      var x = Object.assign({}, r); delete x.code_hash; x.has_account = !!x.owner; x.reporter = x.owner ? { username: x.owner, name: (read(KA, {})[x.owner] || {}).name || x.owner } : null; delete x.owner; return x;
+    }
+  });
+  function mode() { return SERVER ? "server" : "local"; }
+  function chip() {
+    var s = session();
+    document.querySelectorAll("[data-lcs-acct]").forEach(function (a) {
+      var t = a.querySelector(".lcs-acct-t");
+      if (t) t.textContent = s ? s.name : "Tài khoản";
+      a.classList.toggle("in", !!s);
+      a.setAttribute("aria-label", s ? "Tài khoản: " + s.name + " (" + (ROLE[s.role] || "") + ")" : "Đăng nhập hoặc tạo tài khoản");
+      a.title = s ? s.name + " · " + (ROLE[s.role] || "") : "Tài khoản: đăng nhập hoặc tạo mới";
+    });
+  }
+  function changed() { chip(); try { window.dispatchEvent(new CustomEvent("lcs:auth", { detail: session() })); } catch (e) {} }
+  window.addEventListener("storage", function (e) { if (!SERVER && (e.key === KS || e.key === KA)) changed(); });
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", chip); else chip();
+  var readyP = SERVER ? probe() : Promise.resolve();
+  window.LCS = Object.freeze({ session: session, login: login, register: register, logout: logout, contacts: contacts, saveContacts: saveContacts, mode: mode, reports: reports, ROLE: ROLE, SEED: SEED, DEMO_PW: DEMO_PW });
+})();
+</script>
+<style>
+.ai-tag{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.04em;color:var(--lcs-blue);background:var(--lcs-blue-soft);border:1px solid var(--lcs-blue-line);border-radius:6px;padding:0 5px;margin-right:2px;vertical-align:1px}
+.ai-advice{display:flex;gap:10px;align-items:flex-start;margin-top:10px;padding:11px 13px;border-radius:12px;background:var(--lcs-blue-softer);border:1px solid var(--lcs-blue-line);font-size:13px;color:var(--lcs-text-2);line-height:1.6}
+.ai-advice strong{display:block;color:var(--lcs-ink)}.ai-advice p{margin:2px 0 0}.ai-advice .ic{width:18px;height:18px;flex-shrink:0;margin-top:2px;color:var(--lcs-blue)}
+.ai-advice.warn{background:var(--lcs-amber-soft);border-color:var(--lcs-warn-line)}.ai-advice.warn .ic{color:var(--lcs-warn-mid)}
+</style>
+</head>
+<body>
+  <svg aria-hidden="true" focusable="false" class="icon-defs" xmlns="http://www.w3.org/2000/svg">
+  <svg aria-hidden="true" focusable="false" class="icon-defs" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="icon-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/></symbol>
+    <symbol id="icon-flag" viewBox="0 0 24 24"><path d="M4 22V4m0 1c4-3 8 3 12 0 2-1 3-1 4-1v12c-4-2-8 2-12-1-1-.5-3-1-4 0"/></symbol>
+    <symbol id="icon-arrow" viewBox="0 0 24 24"><path d="m5 12 14 0m-6-6 6 6-6 6"/></symbol>
+    <symbol id="icon-left" viewBox="0 0 24 24"><path d="m19 12-14 0m6-6-6 6 6 6"/></symbol>
+    <symbol id="icon-check" viewBox="0 0 24 24"><path d="m5 12 5 5L20 7"/></symbol>
+    <symbol id="icon-check-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></symbol>
+    <symbol id="icon-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7v.2"/></symbol>
+    <symbol id="icon-alert" viewBox="0 0 24 24"><path d="M10.4 4.4 2.2 18.7a2 2 0 0 0 1.8 3h16a2 2 0 0 0 1.8-3L13.6 4.4a1.9 1.9 0 0 0-3.2 0Z"/><path d="M12 9v5m0 3v.2"/></symbol>
+    <symbol id="icon-phone" viewBox="0 0 24 24"><path d="M21 16v3a2 2 0 0 1-2 2C9.6 21 3 14.4 3 5a2 2 0 0 1 2-2h3a2 2 0 0 1 2 1.7l.5 2.6a2 2 0 0 1-.6 1.8L8 11a15 15 0 0 0 5 5l1.9-1.9a2 2 0 0 1 1.8-.6l2.6.5A2 2 0 0 1 21 16Z"/></symbol>
+    <symbol id="icon-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7 .3l2-2a5 5 0 0 0-7-7l-1.1 1.1M14 11a5 5 0 0 0-7-.3l-2 2a5 5 0 0 0 7 7L13 18"/></symbol>
+    <symbol id="icon-card" viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20m-15 5h4"/></symbol>
+    <symbol id="icon-message" viewBox="0 0 24 24"><path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5c-1.5 0-2.9-.4-4.1-1L3 20l1.8-5.1a7.5 7.5 0 1 1 15.2-3.4Z"/></symbol>
+    <symbol id="icon-paperclip" viewBox="0 0 24 24"><path d="m21 11.5-9.6 9.6a6 6 0 0 1-8.5-8.5l9.6-9.6a4 4 0 0 1 5.7 5.7L8.6 18.3a2 2 0 0 1-2.8-2.8l8.5-8.5"/></symbol>
+    <symbol id="icon-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></symbol>
+    <symbol id="icon-lock" viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></symbol>
+    <symbol id="icon-eye" viewBox="0 0 24 24"><path d="M2 12s4-6 10-6 10 6 10 6-4 6-10 6-10-6-10-6Z"/><circle cx="12" cy="12" r="2.5"/></symbol>
+    <symbol id="icon-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="icon-home" viewBox="0 0 24 24"><path d="m3 11 9-8 9 8v10H3V11Zm6 10v-7h6v7"/></symbol>
+    <symbol id="icon-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14.4-4.8L3 9m0-6v6h6M4 13a8 8 0 0 0 14.4 4.8L21 15m0 6v-6h-6"/></symbol>
+    <symbol id="icon-close" viewBox="0 0 24 24"><path d="M5 5l14 14M19 5 5 19"/></symbol>
+    <symbol id="icon-chevron" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+    <symbol id="icon-heart" viewBox="0 0 24 24"><path d="M20 5a5 5 0 0 0-7 0l-1 1-1-1a5 5 0 0 0-7 7l8 8 8-8a5 5 0 0 0 0-7Z"/></symbol>
+  </svg>
+    <symbol id="icon-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
+    <symbol id="icon-book" viewBox="0 0 24 24"><path d="M4 19.5V5a2 2 0 0 1 2-2h14v16H6a2 2 0 0 0-2 2Zm0 0A2 2 0 0 0 6 22h14"/></symbol>
+    <symbol id="icon-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.6a3.5 3.5 0 0 1 0 6.8M18 14c2.2.7 3.5 2.8 3.5 6"/></symbol>
+    <symbol id="icon-wifi-off" viewBox="0 0 24 24"><path d="m3 3 18 18M8.5 16.5a5 5 0 0 1 7 0M5 13a10 10 0 0 1 5.2-2.8M19 13a10 10 0 0 0-2.4-1.7M2 9a15 15 0 0 1 4.2-2.7M22 9a15 15 0 0 0-11-3.9M12 20h.01"/></symbol>
+
+  </svg>
+  <div class="site-shell">
+    <!-- LCS-HEADER:START (giống hệt nhau ở mọi trang, chỉ khác mục đang chọn) -->
+<div class="lcs-hdr" role="banner"><div class="lcs-hdr-in">
+  <a href="index.html" class="lcs-logo" aria-label="Lá Chắn Số - về trang chủ"><span class="lcs-mark"><svg class="lcs-emblem" viewBox="0 0 200 104" aria-hidden="true" focusable="false"><rect x="3" y="3" width="194" height="42" fill="#003d82" stroke="#fff" stroke-width="5"/><text x="100" y="31" text-anchor="middle" font-family="Be Vietnam Pro,Arial,sans-serif" font-weight="800" font-size="17" fill="#fff" textLength="172" lengthAdjust="spacingAndGlyphs">THANH NIÊN VIỆT NAM</text><path d="M24 50H176L100 101Z" fill="#e5373a" stroke="#fff" stroke-width="5" stroke-linejoin="miter"/><path d="M100 56l4.4 9.6 10.4 1.2-7.7 7.1 2.1 10.3L100 78.8l-9.2 4.4 2.1-10.3-7.7-7.1 10.4-1.2Z" fill="#fad550"/></svg></span><span class="lcs-brand">LÁ CHẮN <span>SỐ</span><small>Vì một cộng đồng an toàn</small></span></a>
+  <nav class="lcs-nav" aria-label="Chức năng"><a href="index.html">Trang chủ</a><a href="quick-check.html">Kiểm tra</a><a href="message-check.html">Tin nhắn</a><a href="learn.html">Học 1 phút</a><a href="quiz.html">Quiz</a><a href="ask-family.html">Người thân</a><a href="report.html">Báo cáo</a></nav>
+  <span class="lcs-right"><a class="lcs-home" href="index.html" aria-label="Trang chủ"><svg class="lcs-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 11 9-8 9 8v10H3V11Zm6 10v-7h6v7"/></svg>Trang chủ</a><a class="lcs-acct" href="account.html" data-lcs-acct><svg class="lcs-ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg><span class="lcs-acct-t">Tài khoản</span></a><span data-lcs-fs></span></span>
+</div></div>
+<!-- LCS-HEADER:END -->
+
+    <main class="main-layout">
+      <aside class="intro-panel" aria-label="Giới thiệu chức năng">
+        <div class="intro-topline"><span class="pill muted"><svg class="ic"><use href="#icon-shield"></use></svg> KẾT QUẢ KIỂM TRA</span></div>
+        <h1>Hiểu rõ <em>rủi ro</em>,<br/>biết việc cần làm.</h1>
+        <p class="intro-desc">Mỗi kết quả đều kèm lý do, nguồn và thời điểm đối chiếu. Kết quả là gợi ý để bạn thận trọng, không phải kết luận ai đó phạm tội.</p>
+        <div class="process-rail" style="margin-top:28px"><span class="rail-title">Ba mức kết quả</span>
+          <div><span class="rail-number" style="background:#14a05a;border-color:#14a05a;color:#fff">✓</span><span>An toàn có điều kiện: có căn cứ tích cực</span></div>
+          <div><span class="rail-number" style="background:#f2a20c;border-color:#f2a20c;color:#fff">?</span><span>Nghi ngờ: thiếu dữ liệu hoặc bất thường</span></div>
+          <div><span class="rail-number" style="background:#e5373a;border-color:#e5373a;color:#fff">!</span><span>Nguy hiểm: bằng chứng rủi ro mạnh</span></div>
+        </div>
+        <p class="intro-footnote"><svg class="ic"><use href="#icon-info"></use></svg> Không tìm thấy báo cáo ≠ an toàn</p>
+      </aside>
+      <section class="workspace" aria-label="Kết quả kiểm tra">
+        <div class="workspace-header"><span class="runtime-badge demo">Bản demo · dữ liệu mô phỏng</span><a class="text-link" href="quick-check.html" style="text-decoration:none"><svg class="ic"><use href="#icon-left"></use></svg> Kiểm tra khác</a></div>
+        <div id="app" aria-live="polite"></div>
+        <footer class="workspace-footer">Lá Chắn Số · Nguyên mẫu UX/UI cho Hackathon Đồng Nai 2026 · Kết quả chỉ mang tính <strong>tham khảo</strong>, không phải kết luận pháp lý.</footer>
+      </section>
+    </main>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script>
+/* Lá Chắn Số - F08 Kết quả và hành động. Không phụ thuộc thư viện.
+   Nhận dữ liệu từ F01: sessionStorage "lcs_check_request" (hoặc ?type=&value=).
+   Gửi sang F02: sessionStorage "lcs_f02_prefill" (F02 đã đọc khóa này khi khởi động). */
+(() => {
+  "use strict";
+  const PAGES = {
+    F01: "quick-check.html",
+    F02: "report.html",
+    F00: "index.html",
+    F03: "ask-family.html",
+    F04: "learn.html",
+    F07: "message-check.html"
+  };
+  const READY = { F00: true, F01: true, F02: true, F03: true, F04: true, F07: true };
+  // Hình thức lừa đảo -> bài học F04 phù hợp (id bài trong F04)
+  const LESSON_FOR = { fake_authority: "authority", fake_job: "job", fake_gift: "gift", phishing: "bank", investment: "investment" };
+  const KEY_REQUEST = "lcs_check_request";
+  const KEY_F02 = "lcs_f02_prefill";
+  const $ = (s) => document.querySelector(s);
+  const root = $("#app");
+  const icon = (n) => `<svg class="ic" aria-hidden="true"><use href="#icon-${n}"></use></svg>`;
+  const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const TYPE_LABEL = { phone: ["Số điện thoại", "phone"], url: ["Đường dẫn URL", "link"], bank: ["Số tài khoản", "card"], message: ["Tin nhắn", "message"] };
+
+  /* ===== DỮ LIỆU MÔ PHỎNG (thay bằng API thật sau hackathon) ===== */
+  const DB = {
+    reportedPhones: { "0899000111": { reports: 37, lastSeen: "20/11/2026", scamType: "fake_authority", note: "giả danh công an gọi yêu cầu xác minh tài khoản" } },
+    verifiedPhones: { "19000000": { name: "Tổng đài CSKH Ngân hàng A (tên giả)" } },
+    reportedBanks: { "9704000011112222": { reports: 12, lastSeen: "18/11/2026", scamType: "fake_job", note: "nhận tiền \"phí kích hoạt\" việc làm online" } },
+    reportedDomains: { "bocongan-xacminh.xyz": { reports: 21, lastSeen: "22/11/2026", scamType: "fake_authority" } },
+    verifiedDomains: ["chinhphu.vn", "dichvucong.gov.vn"],
+    source: "Bộ dữ liệu mô phỏng Lá Chắn Số",
+  };
+  const BRANDS = ["vietcombank", "techcombank", "bidv", "agribank", "vietinbank", "mbbank", "tpbank", "momo", "zalopay", "shopee", "lazada", "congan", "bocongan", "dichvucong", "vneid", "evn", "thue"];
+  const RISKY_TLDS = ["xyz", "top", "click", "icu", "buzz", "online", "site", "live", "shop", "vip"];
+  const SHORTENERS = ["bit.ly", "tinyurl.com", "t.co", "cutt.ly", "shorturl.at", "rb.gy"];
+
+  const noMark = (s) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/đ/g, "d").replace(/Đ/g, "D").toLowerCase();
+  const digits = (s) => s.replace(/\D/g, "");
+  function normPhone(v) { let d = digits(v); if (v.trim().startsWith("+84")) d = "0" + d.slice(2); else if (d.startsWith("84") && d.length === 11) d = "0" + d.slice(2); return d; }
+
+  function analyzeUrl(raw) {
+    const reasons = []; let score = 0; let scamType = "phishing";
+    let u; try { u = new URL(raw); } catch { return { level: "warn", reasons: [{ tone: "amber", text: "Không đọc được đường dẫn này." }], scamType }; }
+    const host = u.hostname.toLowerCase().replace(/^www\./, "");
+    const add = (tone, text) => { reasons.push({ tone, text }); score += tone === "red" ? 3 : 1; };
+    const rep = Object.entries(DB.reportedDomains).find(([d]) => host === d || host.endsWith("." + d));
+    if (rep) { add("red", `Tên miền đã bị cộng đồng báo cáo ${rep[1].reports} lần, gần nhất ngày ${rep[1].lastSeen}.`); scamType = rep[1].scamType; }
+    if (DB.verifiedDomains.some((d) => host === d || host.endsWith("." + d)))
+      return { level: "safe", reasons: [{ tone: "green", text: `Tên miền ${host} nằm trong danh sách trang chính thức đã xác minh.` }, { tone: "blue", text: "Hãy kiểm tra kỹ từng ký tự trên thanh địa chỉ trước khi nhập thông tin." }], scamType: "" };
+    if (u.protocol === "http:") add("amber", "Trang không dùng kết nối bảo mật HTTPS.");
+    if (host.includes("xn--")) add("red", "Tên miền dùng ký tự đặc biệt có thể giả mạo chữ cái (punycode).");
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) add("red", "Đường dẫn dùng địa chỉ IP thay cho tên miền.");
+    if (u.username || raw.includes("@")) add("red", "Đường dẫn chứa ký tự @ có thể che giấu trang thật.");
+    const brand = BRANDS.find((b) => host.replace(/[-.]/g, "").includes(b));
+    if (brand) add("red", `Tên miền có chữ "${brand}" nhưng không phải trang chính thức đã xác minh. Đây là dấu hiệu giả mạo thường gặp.`);
+    const tld = host.split(".").pop();
+    if (RISKY_TLDS.includes(tld)) add("amber", `Đuôi tên miền .${tld} hay bị dùng cho trang lừa đảo ngắn hạn.`);
+    if (SHORTENERS.includes(host)) add("amber", "Đây là link rút gọn, không biết trước trang đích thật.");
+    if ((host.match(/-/g) || []).length >= 2) add("amber", "Tên miền có nhiều dấu gạch ngang, kiểu đặt tên hay gặp ở trang giả.");
+    if (/dang-?nhap|login|xac-?minh|verify|otp/.test(u.pathname.toLowerCase())) add("amber", "Đường dẫn dẫn tới trang đăng nhập hoặc xác minh.");
+    if (!reasons.length) reasons.push({ tone: "amber", text: "Chưa có báo cáo nào về tên miền này. Chưa có báo cáo không có nghĩa là an toàn." });
+    return { level: score >= 3 ? "danger" : "warn", reasons, scamType };
+  }
+  function analyzePhone(raw) {
+    const p = normPhone(raw);
+    const rep = DB.reportedPhones[p];
+    if (rep) return { level: "danger", scamType: rep.scamType, reasons: [
+      { tone: "red", text: `Số này đã bị cộng đồng báo cáo ${rep.reports} lần, gần nhất ngày ${rep.lastSeen}.` },
+      { tone: "red", text: `Hình thức được phản ánh: ${rep.note}.` }] };
+    const ver = DB.verifiedPhones[p];
+    if (ver) return { level: "safe", scamType: "", reasons: [
+      { tone: "green", text: `Số này khớp với ${ver.name} trong danh bạ tổng đài đã xác minh.` },
+      { tone: "blue", text: "Kẻ gian có thể giả số hiển thị. Tổng đài thật không bao giờ hỏi OTP hoặc mật khẩu." }] };
+    const reasons = [{ tone: "amber", text: "Chưa có dữ liệu về số này. Không tìm thấy báo cáo không có nghĩa là an toàn." }];
+    if (raw.trim().startsWith("+") && !raw.trim().startsWith("+84")) reasons.unshift({ tone: "amber", text: "Đây là số quốc tế. Cuộc gọi lạ từ nước ngoài cần đặc biệt cảnh giác." });
+    return { level: "warn", scamType: "", reasons };
+  }
+  function analyzeBank(raw) {
+    const b = digits(raw); const rep = DB.reportedBanks[b];
+    if (rep) return { level: "danger", scamType: rep.scamType, reasons: [
+      { tone: "red", text: `Số tài khoản đã bị báo cáo ${rep.reports} lần, gần nhất ngày ${rep.lastSeen}.` },
+      { tone: "red", text: `Hình thức được phản ánh: ${rep.note}.` }] };
+    return { level: "warn", scamType: "", reasons: [
+      { tone: "amber", text: "Chưa có báo cáo nào về số tài khoản này. Không tìm thấy báo cáo không có nghĩa là an toàn." },
+      { tone: "blue", text: "Hãy xác minh người nhận qua kênh khác (gọi số bạn đã biết, gặp trực tiếp) trước khi chuyển tiền." }] };
+  }
+  // Bản demo dùng quy tắc từ khóa. Bản đầy đủ gọi F07 (AI phân tích tin nhắn).
+  const MSG_RULES = [
+    [/\botp\b|ma xac (thuc|nhan)|mat khau/, "red", "Tin nhắn yêu cầu mã OTP hoặc mật khẩu. Cơ quan, ngân hàng thật không bao giờ hỏi thông tin này.", ""],
+    [/cong an|vien kiem sat|toa an|rua tien|vu an/, "amber", "Tin nhắn nhắc tới công an, vụ án hoặc rửa tiền để gây sợ hãi.", "fake_authority"],
+    [/ngan hang|khoa tai khoan|tai khoan (cua ban )?(bi|se)/, "amber", "Tin nhắn nói tài khoản của bạn có vấn đề và cần xử lý.", "fake_authority"],
+    [/chuyen (tien|khoan)|nop (tien|phi)|phi kich hoat|dat coc/, "amber", "Tin nhắn yêu cầu chuyển tiền hoặc nộp phí.", ""],
+    [/gap|ngay lap tuc|trong \d+ ?(h|gio|phut)|het han/, "amber", "Tin nhắn hối thúc, tạo áp lực thời gian.", ""],
+    [/trung thuong|qua tang|nhan qua|tri an/, "amber", "Tin nhắn hứa trao thưởng hoặc quà tặng.", "fake_gift"],
+    [/viec nhe|luong cao|cong tac vien|\bctv\b|lam tai nha/, "amber", "Tin nhắn mời việc nhẹ lương cao.", "fake_job"],
+    [/dau tu|loi nhuan|sinh loi|lai suat cao/, "amber", "Tin nhắn hứa hẹn lợi nhuận đầu tư cao.", "investment"],
+  ];
+  function analyzeMessage(raw) {
+    const t = noMark(raw); const reasons = []; let score = 0; let scamType = "";
+    for (const [re, tone, text, type] of MSG_RULES) if (re.test(t)) { reasons.push({ tone, text }); score += tone === "red" ? 3 : 1; if (type && !scamType) scamType = type; }
+    const link = raw.match(/https?:\/\/[^\s]+|\b[\w-]+\.(?:xyz|top|click|icu|vip|online|site|com|vn|net)\b[^\s]*/i);
+    if (link) {
+      const r = analyzeUrl(/^https?:/i.test(link[0]) ? link[0] : "https://" + link[0]);
+      if (r.level === "danger") { reasons.push({ tone: "red", text: `Tin nhắn chứa đường dẫn đáng ngờ: ${link[0]}` }); score += 3; scamType = scamType || "phishing"; }
+      else if (r.level === "warn") { reasons.push({ tone: "amber", text: `Tin nhắn chứa đường dẫn chưa xác minh: ${link[0]}` }); score += 1; }
+    }
+    if (!reasons.length) reasons.push({ tone: "amber", text: "Không thấy dấu hiệu rõ ràng, nhưng chưa đủ căn cứ để kết luận an toàn." });
+    return { level: score >= 3 ? "danger" : "warn", reasons, scamType }; // tin nhắn không bao giờ được "an toàn" chỉ nhờ từ khóa
+  }
+  /* ===== AI GEMINI (qua server.js, khóa API chỉ nằm ở máy chủ) =====
+     Chỉ chạy khi trang mở qua http://localhost (start-server.bat). Mở bằng file:// hoặc máy chủ lỗi
+     => dùng quy tắc từ khóa ở trên. AI không bao giờ hạ mức cảnh báo mà quy tắc đã tìm thấy. */
+  const CONNECTED = location.protocol === "http:" || location.protocol === "https:";
+  const AI_TYPES = ["message", "url"]; // SĐT và số tài khoản: AI không có dữ liệu báo cáo nên chỉ dùng danh sách đối chiếu
+  const AI_LEVEL = { an_toan: "safe", nghi_ngo: "warn", nguy_hiem: "danger" };
+  const RANK = { safe: 0, warn: 1, danger: 2 };
+  // Che bớt dữ liệu cá nhân trước khi gửi AI (giữ đường dẫn vì đó là dấu hiệu quan trọng)
+  const redactAI = (t) => String(t).replace(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/gi, "[email]")
+    .replace(/((?:OTP|mã xác thực|mật khẩu|password)\s*[:=]?\s*)\d{4,8}\b/gi, "$1[đã che]")
+    .replace(/\b\d{9,12}\b(?![\w.-]*\.[a-z])/gi, "[dãy số]");
+  async function askAI(req) {
+    if (!CONNECTED || !AI_TYPES.includes(req.type)) return { status: "off" };
+    const ctrl = new AbortController(), timer = setTimeout(() => ctrl.abort(), 24000);
+    try {
+      const res = await fetch("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, cache: "no-store", signal: ctrl.signal,
+        body: JSON.stringify({ type: req.type, text: req.type === "message" ? redactAI(req.value) : req.value }) });
+      const x = await res.json().catch(() => null);
+      if (res.ok && x && x.ai === true && AI_LEVEL[x.muc] && Array.isArray(x.ly_do)) return { status: "ok", data: x };
+      return { status: res.status === 503 ? "off" : "fallback", note: x && x.message };
+    } catch { return { status: "fallback", note: "Không nhận được phản hồi từ AI." }; }
+    finally { clearTimeout(timer); }
+  }
+  /* Gộp lý do của AI và của quy tắc theo chủ đề (OTP, công an, chuyển tiền, hối thúc, đường dẫn...).
+     Mỗi ý chỉ hiện một lần: giữ câu của AI, lấy màu chấm nặng nhất. Lý do có số liệu đối chiếu (đã bị báo cáo, danh sách xác minh) luôn giữ. */
+  const TOPICS = [["secret",/otp|mat khau|ma xac (thuc|nhan)|ma bi mat|cccd|can cuoc|thong tin (ca nhan|bao mat)|password/],["authority",/cong an|vien kiem sat|toa an|rua tien|vu an|canh sat|co quan|to chuc|tu xung|gia danh|mao danh/],["bank",/ngan hang|khoa tai khoan|tai khoan (cua ban )?(bi|se|co van de)/],["money",/chuyen (tien|khoan)|nop (tien|phi)|dong (tien|phi)|phi (kich hoat|dich vu|nhan)|dat coc|tien truoc/],["urgency",/gap|ngay lap tuc|hoi thuc|ap luc|trong \d+ ?(h|gio|phut)|het han|khan cap|thoi gian/],["link",/duong dan|duong link|\blink\b|\burl\b|ten mien|truy cap|trang web|website/],["prize",/trung thuong|qua tang|nhan qua|tri an|phan thuong/],["job",/viec nhe|luong cao|cong tac vien|\bctv\b|tuyen dung|lam tai nha|nhiem vu|viec lam/],["invest",/dau tu|loi nhuan|sinh loi|lai suat/]];
+  const topicsOf = (t) => { const n = noMark(t); return new Set(TOPICS.filter(([, re]) => re.test(n)).map(([k]) => k)); };
+  const TONE_RANK = { green: 0, blue: 0, amber: 1, red: 2 };
+  function dedupeReasons(aiList, localList) {
+    const ai = aiList.map((r) => ({ ...r, topics: topicsOf(r.text) }));
+    const kept = [];
+    for (const r of localList) {
+      const tp = topicsOf(r.text);
+      const factual = /bao cao \d+ lan|danh sach|danh ba|da xac minh|punycode|dia chi ip/.test(noMark(r.text));
+      const owners = ai.filter((a) => [...tp].some((k) => a.topics.has(k)));
+      if (!factual && owners.length) {
+        owners.forEach((a) => { if ((TONE_RANK[r.tone] || 0) > (TONE_RANK[a.tone] || 0)) a.tone = r.tone; });
+        continue; // ý này AI đã nói, bỏ câu của quy tắc
+      }
+      kept.push(r);
+    }
+    return [...ai.map(({ topics, ...r }) => r), ...kept];
+  }
+  function mergeAI(local, ai) {
+    if (ai.status !== "ok") return { ...local, ai: null, aiStatus: ai.status, aiNote: ai.note || "" };
+    const x = ai.data; let level = AI_LEVEL[x.muc];
+    if (RANK[local.level] > RANK[level]) level = local.level;            // không hạ mức của quy tắc
+    if (level === "safe" && local.level !== "safe") level = "warn";      // AI một mình không đủ để kết luận an toàn
+    const tone = { an_toan: "green", nghi_ngo: "amber", nguy_hiem: "red" }[x.muc];
+    const reasons = dedupeReasons(x.ly_do.map((text) => ({ tone, text, ai: true })), local.reasons);
+    return { ...local, level, reasons, ai: { muc: x.muc, advice: x.loi_khuyen, model: x.model, provider: x.provider || "", cached: !!x.cached }, aiStatus: "ok" };
+  }
+  // Đối chiếu: quy tắc cục bộ + AI (nếu có máy chủ). Mô phỏng lỗi mạng giữ nguyên cho buổi demo.
+  async function lookup(req, failThisTime) {
+    if (failThisTime || !navigator.onLine) { await new Promise((r) => setTimeout(r, 900)); throw new Error("network"); }
+    const fn = { phone: analyzePhone, url: analyzeUrl, bank: analyzeBank, message: analyzeMessage }[req.type];
+    const local = fn(req.value);
+    const [ai] = await Promise.all([askAI(req), new Promise((r) => setTimeout(r, 600))]);
+    return { ...mergeAI(local, ai), checkedAt: new Date() };
+  }
+
+  /* ===== GIAO DIỆN ===== */
+  const LEVEL = {
+    safe: { cls: "safe", icon: "check-circle", label: "An toàn có điều kiện", title: "Có căn cứ tích cực, vẫn cần thận trọng", sub: "Thông tin này khớp với nguồn đã xác minh. Tuy vậy, hãy tiếp tục xác minh nếu bị yêu cầu chuyển tiền hoặc cung cấp mã OTP." },
+    warn: { cls: "warn", icon: "alert", label: "Nghi ngờ", title: "Chưa đủ căn cứ, hãy dừng lại kiểm tra", sub: "Hệ thống thiếu dữ liệu hoặc thấy điểm bất thường. Đừng chuyển tiền cho tới khi xác minh được qua kênh chính thức hoặc người thân." },
+    danger: { cls: "danger", icon: "alert", label: "Nguy hiểm", title: "Có dấu hiệu lừa đảo rõ ràng", sub: "Dừng mọi giao dịch ngay. Không cung cấp OTP, mật khẩu hay chuyển tiền theo yêu cầu này." }
+  };
+  const TODO = {
+    safe: ["Chỉ liên hệ lại qua số hoặc trang bạn tự tìm từ nguồn chính thức.", "Không cung cấp OTP, mật khẩu cho bất kỳ ai, kể cả nhân viên.", "Nếu thấy điều bất thường, hãy kiểm tra lại hoặc hỏi người thân."],
+    warn: ["Chưa chuyển tiền, chưa bấm vào đường dẫn.", "Gọi lại cho người hoặc tổ chức đó qua số bạn đã biết từ trước.", "Hỏi ý kiến người thân trước khi quyết định.", "Nếu chắc chắn có dấu hiệu lừa đảo, hãy báo cáo để cảnh báo cộng đồng."],
+    danger: ["Dừng giao dịch, cúp máy hoặc không trả lời tin nhắn.", "Không cung cấp OTP, mật khẩu, ảnh CCCD.", "Nếu đã chuyển tiền: gọi ngay tổng đài ngân hàng của bạn để yêu cầu hỗ trợ và trình báo cơ quan công an nơi gần nhất.", "Báo cáo để cộng đồng được cảnh báo."]
+  };
+  const state = { req: null, result: null, phase: "loading", failNext: false };
+
+  function stepper() {
+    return `<nav class="stepper" aria-label="Tiến trình kiểm tra"><div class="step done"><span class="step-bubble">${icon("check")}</span><span class="step-label">Chọn loại</span></div><div class="step-line"></div><div class="step done"><span class="step-bubble">${icon("check")}</span><span class="step-label">Nhập thông tin</span></div><div class="step-line"></div><div class="step active" aria-current="step"><span class="step-bubble">3</span><span class="step-label">Kết quả</span></div></nav>`;
+  }
+  function checkedItem() {
+    const [label, g] = TYPE_LABEL[state.req.type];
+    return `<div class="checked-item">${icon(g)}<div style="min-width:0"><small>${label} bạn kiểm tra</small><code>${esc(state.req.value)}</code></div></div>`;
+  }
+  function tile(page, cls, ic, title, sub, action, query) {
+    return `<button type="button" class="action-tile ${cls}" data-go="${page}" ${query ? `data-q="${esc(query)}"` : ""} ${action ? `data-action="${action}"` : ""}>${icon(ic)}<strong>${title}</strong><small>${sub}</small></button>`;
+  }
+  function actions(level) {
+    const report = (cls) => tile("F02", cls, "flag", "Báo cáo lừa đảo", "Mở trang Báo cáo, thông tin đã được điền sẵn", "report");
+    const ask = (cls) => tile("F03", cls, "users", "Hỏi người thân", "Gửi kết quả cho người bạn tin tưởng");
+    const lesson = LESSON_FOR[state.result.scamType] || (state.req.type === "url" ? "bank" : "otp");
+    const learn = tile("F04", "", "book", "Bài học liên quan", "Học 1 phút cách nhận biết chiêu này", "", "?lesson=" + lesson);
+    // Tin nhắn: mời phân tích sâu ở F07 (chuyển nội dung qua sessionStorage "lcs_f07_message")
+    if (state.req.type === "message") {
+      const deep = tile("F07", "", "message", "Phân tích chi tiết", "Mở trang Phân tích tin nhắn với tin nhắn này", "deep");
+      if (level === "danger") return report("danger") + deep + learn;
+      if (level === "warn") return ask("primary") + report("") + deep;
+    }
+    const again = (cls) => tile("F01", cls, "search", "Kiểm tra khác", "Quay lại Kiểm tra nhanh");
+    if (level === "danger") return report("danger") + ask("") + learn;
+    if (level === "warn") return ask("primary") + report("") + learn;
+    return again("primary") + tile("F00", "", "home", "Về trang chủ", "Xem tất cả chức năng") + learn;
+  }
+  function view() {
+    if (state.phase === "empty") return `<div class="form-card"><div class="form-inner"><div class="loading-card">${icon("info")}<h2 class="screen-title" style="margin-top:12px">Chưa có thông tin để kiểm tra</h2><p>Hãy bắt đầu từ trang Kiểm tra nhanh.</p><div class="action-row" style="justify-content:center"><a class="btn btn-primary" style="flex:0 1 auto" href="${PAGES.F01}">${icon("search")} Đến Kiểm tra nhanh</a></div></div></div></div>`;
+    if (state.phase === "loading") return `<div class="form-card"><div class="form-inner">${stepper()}${checkedItem()}<div class="loading-card"><span class="loading-spinner"></span><p>Đang đối chiếu dữ liệu đã xác minh và dấu hiệu rủi ro${CONNECTED && AI_TYPES.includes(state.req.type) ? ", AI đang phân tích (có thể mất vài giây)" : ""}...</p></div></div></div>`;
+    if (state.phase === "error") return `<div class="form-card"><div class="form-inner">${stepper()}${checkedItem()}
+      <div role="alert" class="inline-feedback">${icon("wifi-off")}<span>Mất mạng hoặc dịch vụ đang lỗi. Thông tin của bạn vẫn được giữ nguyên.</span></div>
+      <p class="screen-subtitle">Lỗi kết nối không có nghĩa là thông tin này an toàn. Trong lúc chờ, đừng chuyển tiền hay cung cấp OTP.</p>
+      <div class="action-row"><a class="btn btn-secondary" href="${PAGES.F01}?edit=1">${icon("left")} Sửa thông tin</a><button type="button" class="btn btn-primary" data-action="retry">${icon("refresh")} Thử lại</button></div></div></div>`;
+    const r = state.result; const L = LEVEL[r.level];
+    return `<div class="form-card"><div class="form-inner">${stepper()}
+      ${checkedItem()}
+      <section class="verdict ${L.cls}"><div class="verdict-top"><span class="verdict-icon">${icon(L.icon)}</span><div><p class="verdict-label">${L.label}</p><h2 id="screen-heading" tabindex="-1">${L.title}</h2></div></div><p class="verdict-sub">${L.sub}</p></section>
+      <h3 class="section-title"><span class="section-index">01</span> Vì sao có kết quả này?</h3>
+      <ul class="reason-list">${r.reasons.map((x) => `<li><span class="dot ${x.tone}"></span><span>${x.ai ? '<b class="ai-tag">AI</b> ' : ""}${esc(x.text)}</span></li>`).join("")}</ul>
+      ${r.ai ? `<div class="ai-advice">${icon("info")}<div><strong>Lời khuyên từ AI</strong><p>${esc(r.ai.advice)}</p></div></div>` : ""}
+      ${r.aiStatus === "fallback" ? `<div class="ai-advice warn">${icon("alert")}<div><strong>AI đang bận, đã dùng quy tắc từ khóa</strong><p>${esc(r.aiNote || "AI tạm thời không phản hồi.")} Kết quả trên vẫn đầy đủ lý do và việc nên làm. Bạn có thể bấm Kiểm tra lại sau khoảng 20 giây để có thêm nhận xét của AI.</p></div></div>` : ""}
+      <p class="source-line"><span>${icon("info")} Nguồn: ${DB.source}${r.ai ? " · AI " + esc(r.ai.provider || "") + " (" + esc(r.ai.model || "") + ")" + (r.ai.cached ? ", kết quả đã lưu" : "") + " + quy tắc" : AI_TYPES.includes(state.req.type) ? " · quy tắc từ khóa" + (CONNECTED ? "" : " (mở qua start-server.bat để bật AI)") : ""}</span><span>${icon("clock")} Đối chiếu lúc ${r.checkedAt.toLocaleString("vi-VN")}</span></p>
+      <h3 class="section-title"><span class="section-index">02</span> Việc nên làm ngay</h3>
+      <ol class="todo-list">${TODO[r.level].map((x) => `<li>${esc(x)}</li>`).join("")}</ol>
+      <div class="action-grid">${actions(r.level)}</div>
+      <div class="action-row" style="margin-top:14px"><a class="btn btn-quiet" href="${PAGES.F01}?edit=1">${icon("left")} Sửa thông tin vừa nhập</a></div>
+      <p class="mock-note">Bản demo: danh sách số và tên miền bị báo cáo là dữ liệu mô phỏng. ${r.ai ? "Phần đánh giá có nhãn AI do mô hình AI đưa ra, có thể sai, chỉ để tham khảo." : "AI chưa tham gia kết quả này."}</p>
+    </div></div>`;
+  }
+  let toastTimer;
+  function toast(m) { const t = $("#toast"); t.textContent = m; t.classList.add("show"); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 2600); }
+  function render() { root.innerHTML = view(); }
+
+  async function run() {
+    state.phase = "loading"; render();
+    const fail = state.failNext; state.failNext = false;
+    try { state.result = await lookup(state.req, fail); state.phase = "result"; render(); $("#screen-heading")?.focus({ preventScroll: true }); }
+    catch { state.phase = "error"; render(); }
+  }
+
+  // Chuyển sang F02 với dữ liệu điền sẵn (khóa "lcs_f02_prefill" mà F02 đã đọc sẵn)
+  function goReport() {
+    const { type, value } = state.req; const r = state.result;
+    let indicatorType = type;
+    // F02 chỉ nhận SĐT dạng 0xxx/+84; số khác (vd. 1900) gửi dưới dạng "Thông tin khác"
+    if (type === "phone" && !/^(?:\+?84|0)[\d\s.()-]{8,16}$/.test(value)) indicatorType = "other";
+    const label = { safe: "An toàn có điều kiện", warn: "Nghi ngờ", danger: "Nguy hiểm" }[r.level];
+    const prefill = {
+      source: "F08",
+      indicatorType,
+      indicator: value,
+      scamType: r.scamType || (type === "url" ? "phishing" : ""),
+      description: `[Gợi ý từ kết quả kiểm tra: ${label}] ${r.reasons.map((x) => x.text).join(" ")} Hãy sửa lại phần này theo đúng sự việc bạn gặp.`.slice(0, 1200)
+    };
+    try { sessionStorage.setItem(KEY_F02, JSON.stringify(prefill)); }
+    catch { toast("Trình duyệt chặn lưu tạm. Bạn sẽ cần nhập lại thông tin ở trang báo cáo."); }
+    location.href = PAGES.F02 + "?from=F08";
+  }
+  root.addEventListener("click", (e) => {
+    const a = e.target.closest("[data-action]");
+    if (a && a.dataset.action === "retry") { run(); return; }
+    if (a && a.dataset.action === "report") { goReport(); return; }
+    if (a && a.dataset.action === "deep") {
+      try { sessionStorage.setItem("lcs_f07_message", state.req.value); } catch {}
+      location.href = PAGES.F07 + "?from=F08"; return;
+    }
+    const g = e.target.closest("[data-go]");
+    if (g) {
+      const page = g.dataset.go;
+      if (!READY[page]) { toast(`Trang ${page} chưa có trong bản demo.`); return; }
+      if (page === "F03" && state.result) {
+        // Gửi nhãn đánh giá (không gửi chỉ báo gốc) sang F03 để người dùng có thể kèm vào lời nhắn
+        const assessment = { safe: "CONDITIONALLY_SAFE", warn: "SUSPICIOUS", danger: "DANGEROUS" }[state.result.level];
+        try { sessionStorage.setItem("lcs_f03_context", JSON.stringify({ assessment, indicator_type: state.req.type, source: "F08" })); } catch {}
+      }
+      location.href = PAGES[page] + (g.dataset.q || "");
+    }
+  });
+
+  function init() {
+    const q = new URLSearchParams(location.search);
+    let req = null;
+    if (q.get("type") && q.get("value")) req = { type: q.get("type"), value: q.get("value"), simulateError: q.get("simulateError") === "1" };
+    else { try { req = JSON.parse(sessionStorage.getItem(KEY_REQUEST) || "null"); } catch {} }
+    if (!req || !TYPE_LABEL[req.type] || !req.value) { state.phase = "empty"; render(); return; }
+    state.req = req;
+    if (req.simulateError) {
+      state.failNext = true;
+      // chỉ mô phỏng lỗi một lần, để khi quay lại từ F02 không bị lỗi tiếp
+      try { sessionStorage.setItem(KEY_REQUEST, JSON.stringify({ ...req, simulateError: false })); } catch {}
+    }
+    run();
+  }
+  init();
+})();
+</script>
+<!-- LCS cỡ chữ: nút A− / A+ đồng bộ giữa các trang qua localStorage "lcs_font_scale" -->
+<link rel="stylesheet" href="css/font-size.css">
+<script>
+(function () {
+  var s = window.__lcsFont || { L: [0.9, 1, 1.15, 1.3], i: 1 };
+  var hosts = document.querySelectorAll("[data-lcs-fs]");
+  var outs = [], decs = [], incs = [];
+  hosts.forEach(function (host) {
+    host.innerHTML = '<div class="lcs-fs" role="group" aria-label="Cỡ chữ">' +
+      '<button type="button" data-d="-1" aria-label="Giảm cỡ chữ" title="Giảm cỡ chữ"><span class="lcs-fs-small">A</span>−</button>' +
+      '<output aria-live="polite"></output>' +
+      '<button type="button" data-d="1" aria-label="Tăng cỡ chữ" title="Tăng cỡ chữ">A+</button></div>';
+    outs.push(host.querySelector("output"));
+    decs.push(host.querySelector('[data-d="-1"]'));
+    incs.push(host.querySelector('[data-d="1"]'));
+    host.addEventListener("click", function (e) {
+      var b = e.target.closest("button[data-d]");
+      if (b) set(s.i + Number(b.dataset.d), true);
+    });
+  });
+  function layout() {
+    var w = window.innerWidth / s.L[s.i];
+    document.documentElement.classList.toggle("lcs-compact", w < 1140 && window.innerWidth >= 851);
+    document.documentElement.classList.toggle("lcs-narrow", w < 560);
+  }
+  function set(i, save) {
+    i = Math.max(0, Math.min(s.L.length - 1, i));
+    s.i = i;
+    document.documentElement.style.zoom = s.L[i];
+    outs.forEach(function (o) { o.textContent = Math.round(s.L[i] * 100) + "%"; });
+    decs.forEach(function (b) { b.disabled = i === 0; });
+    incs.forEach(function (b) { b.disabled = i === s.L.length - 1; });
+    if (save) { try { localStorage.setItem("lcs_font_scale", String(s.L[i])); } catch (e) {} }
+    layout();
+  }
+  // Đồng bộ ngay với các tab khác đang mở
+  window.addEventListener("storage", function (e) {
+    if (e.key === "lcs_font_scale") { var k = s.L.indexOf(parseFloat(e.newValue)); set(k >= 0 ? k : 1, false); }
+  });
+  window.addEventListener("resize", layout);
+  set(s.i, false);
+})();
+</script>
+</body>
+</html>

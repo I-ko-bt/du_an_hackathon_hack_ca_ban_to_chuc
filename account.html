@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#00539c" /><link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <meta name="description" content="Đăng nhập hoặc tạo tài khoản Lá Chắn Số." />
+  <title>Lá Chắn Số | Tài khoản</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@500;600;700&family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <!-- LCS cỡ chữ (dùng chung mọi trang): áp dụng trước khi vẽ trang để không bị nháy -->
+<script>(function(){var L=[0.9,1,1.15,1.3],i=1;try{var k=L.indexOf(parseFloat(localStorage.getItem("lcs_font_scale")));if(k>=0)i=k}catch(e){}window.__lcsFont={L:L,i:i};document.documentElement.style.zoom=L[i];})();</script>
+  <link rel="stylesheet" href="css/theme.css"><link rel="stylesheet" href="css/site.css">
+<link rel="stylesheet" href="css/typography.css"><link rel="stylesheet" href="css/home-cards.css"><link rel="stylesheet" href="css/header.css"><link rel="stylesheet" href="css/pages/account.css">
+<script id="lcs-auth">
+/* LCS tài khoản (dùng chung mọi trang).
+   Hai chế độ, tự chọn:
+   1) MÁY CHỦ (mở qua http://localhost sau khi chạy "node server.js"): tài khoản và người thân lưu ở file
+      data/accounts.lcsdb, mã hóa AES-256-GCM, mật khẩu băm scrypt. Trình duyệt chỉ giữ cookie phiên HttpOnly.
+   2) TRÌNH DUYỆT (mở trực tiếp file HTML): trình duyệt không cho trang ghi file ra ổ đĩa, nên tạm lưu trong
+      localStorage của máy này, mật khẩu băm PBKDF2-SHA256 có muối. Chỉ dùng để trình diễn. */
+(function () {
+  "use strict";
+  var KA = "lcs_accounts", KS = "lcs_session", KC = "lcs_srv_user", TTL = 8 * 3600 * 1000, ITER = 120000;
+  var ROLE = { citizen: "Người dân", volunteer: "Đội tình nguyện", reviewer: "Cán bộ kiểm duyệt" };
+  var SEED = [
+    { username: "canbo.demo", name: "Cán bộ Đoàn (demo)", role: "reviewer" },
+    { username: "tinhnguyen.demo", name: "Tình nguyện viên (demo)", role: "volunteer" }
+  ];
+  var DEMO_PW = "LaChanSo@2026";
+  var SERVER = /^https?:$/.test(location.protocol);   // sẽ tắt nếu không có máy chủ Lá Chắn Số
+  var srv = { user: null, contacts: [], ready: false };
+  try { srv.user = JSON.parse(sessionStorage.getItem(KC)) || null; } catch (e) {}
+  function read(k, d) { try { var v = JSON.parse(localStorage.getItem(k)); return v == null ? d : v; } catch (e) { return d; } }
+  function write(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } }
+  function b64(buf) { var s = "", a = new Uint8Array(buf); for (var i = 0; i < a.length; i++) s += String.fromCharCode(a[i]); return btoa(s); }
+  function unb64(s) { var b = atob(s), a = new Uint8Array(b.length); for (var i = 0; i < b.length; i++) a[i] = b.charCodeAt(i); return a; }
+  function salt() { var a = new Uint8Array(16); crypto.getRandomValues(a); return b64(a); }
+  function needCrypto() { if (!(window.crypto && crypto.subtle)) throw new Error("Trình duyệt chưa hỗ trợ mã hóa mật khẩu. Hãy mở bằng Chrome hoặc Edge bản mới."); }
+  async function hash(pw, s) {
+    needCrypto();
+    var key = await crypto.subtle.importKey("raw", new TextEncoder().encode(pw), "PBKDF2", false, ["deriveBits"]);
+    return b64(await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: unb64(s), iterations: ITER }, key, 256));
+  }
+  function same(a, b) { if (a.length !== b.length) return false; var r = 0; for (var i = 0; i < a.length; i++) r |= a.charCodeAt(i) ^ b.charCodeAt(i); return r === 0; }
+  var norm = function (u) { return String(u || "").trim().toLowerCase(); };
+  function pub(a) { return a ? { username: a.username, name: a.name, role: a.role, roleLabel: ROLE[a.role] || a.role, staff: a.role !== "citizen" } : null; }
+
+  /* ---------- Chế độ máy chủ ---------- */
+  async function call(method, route, data) {
+    var r;
+    try { r = await fetch("/api/lcs/" + route, { method: method, credentials: "same-origin", cache: "no-store", headers: data ? { "Content-Type": "application/json" } : {}, body: data ? JSON.stringify(data) : undefined }); }
+    catch (e) { throw new Error("Không kết nối được máy chủ Lá Chắn Số. Kiểm tra cửa sổ đang chạy server.js."); }
+    var j = null; try { j = await r.json(); } catch (e) {}
+    if (!r.ok) { var err = new Error((j && j.message) || "Máy chủ không xử lý được yêu cầu."); if (j && j.fields) err.fields = j.fields; err.status = r.status; throw err; }
+    return j || {};
+  }
+  function setSrv(user, contacts) {
+    srv.user = user || null; srv.contacts = Array.isArray(contacts) ? contacts : [];
+    try { user ? sessionStorage.setItem(KC, JSON.stringify(user)) : sessionStorage.removeItem(KC); } catch (e) {}
+  }
+  function probe() {
+    return fetch("/api/lcs/session", { credentials: "same-origin", cache: "no-store" }).then(function (r) {
+      if (!r.ok) throw 0; return r.json();
+    }).then(function (j) {
+      if (!j || j.mode !== "server") throw 0;
+      setSrv(j.user, j.contacts); srv.ready = true; changed();
+    }).catch(function () { SERVER = false; try { sessionStorage.removeItem(KC); } catch (e) {} changed(); });
+  }
+
+  /* ---------- Chế độ trình duyệt ---------- */
+  async function ensureSeed() {
+    var acc = read(KA, {}), ch = false;
+    for (var i = 0; i < SEED.length; i++) {
+      var s = SEED[i];
+      if (!acc[s.username]) { var sl = salt(); acc[s.username] = { username: s.username, name: s.name, role: s.role, salt: sl, hash: await hash(DEMO_PW, sl), seed: true, created: new Date().toISOString() }; ch = true; }
+    }
+    if (ch) write(KA, acc);
+  }
+  function localSession() {
+    var s = read(KS, null);
+    if (!s || !s.username || !(s.exp > Date.now())) return null;
+    return pub(read(KA, {})[s.username]);
+  }
+
+  /* ---------- Giao diện chung (giữ nguyên cho mọi trang) ---------- */
+  function session() { return SERVER ? (srv.user ? pub(srv.user) : null) : localSession(); }
+  async function login(username, pw) {
+    if (SERVER) { var j = await call("POST", "login", { username: username, password: pw }); setSrv(j.user, j.contacts); changed(); return session(); }
+    await ensureSeed();
+    var u = norm(username), a = read(KA, {})[u];
+    var h = a ? await hash(String(pw || ""), a.salt) : await hash(String(pw || ""), salt());
+    if (!a || !same(h, a.hash)) throw new Error("Tên đăng nhập hoặc mật khẩu không đúng.");
+    if (!write(KS, { username: u, exp: Date.now() + TTL })) throw new Error("Trình duyệt đang chặn lưu dữ liệu nên chưa đăng nhập được.");
+    changed(); return session();
+  }
+  async function register(o) {
+    if (SERVER) { var j = await call("POST", "register", { name: o.name, username: o.username, password: o.password, confirm: o.confirm }); setSrv(j.user, j.contacts); changed(); return session(); }
+    var name = String(o.name || "").trim(), u = norm(o.username), pw = String(o.password || ""), errors = {};
+    if (name.length < 2 || name.length > 50) errors.name = "Tên hiển thị từ 2 đến 50 ký tự.";
+    if (!/^[a-z0-9._]{4,30}$/.test(u)) errors.username = "Tên đăng nhập 4–30 ký tự, chỉ gồm chữ không dấu, số, dấu chấm hoặc gạch dưới.";
+    if (pw.length < 8 || !/[A-Za-z]/.test(pw) || !/\d/.test(pw)) errors.password = "Mật khẩu tối thiểu 8 ký tự, có cả chữ và số.";
+    if (pw !== String(o.confirm || "")) errors.confirm = "Mật khẩu nhập lại chưa khớp.";
+    await ensureSeed();
+    var acc = read(KA, {});
+    if (!errors.username && acc[u]) errors.username = "Tên đăng nhập này đã có người dùng.";
+    if (Object.keys(errors).length) { var e = new Error("Vui lòng kiểm tra lại thông tin."); e.fields = errors; throw e; }
+    var sl = salt();
+    acc[u] = { username: u, name: name, role: "citizen", salt: sl, hash: await hash(pw, sl), created: new Date().toISOString() };
+    if (!write(KA, acc)) throw new Error("Trình duyệt đang chặn lưu dữ liệu nên chưa tạo được tài khoản.");
+    write(KS, { username: u, exp: Date.now() + TTL });
+    changed(); return session();
+  }
+  function logout() {
+    if (SERVER) { setSrv(null, []); call("POST", "logout", {}).catch(function () {}); changed(); return; }
+    try { localStorage.removeItem(KS); } catch (e) {} changed();
+  }
+  function contacts() {
+    var s = session(); if (!s) return [];
+    if (SERVER) return srv.contacts.map(function (c) { return { name: c.name, phone: c.phone, preferred: !!c.preferred }; });
+    return read("lcs_contacts:" + s.username, []);
+  }
+  function saveContacts(list) {
+    var s = session(); if (!s) return false;
+    list = (list || []).slice(0, 10);
+    if (SERVER) {
+      srv.contacts = list.map(function (c) { return { name: c.name, phone: c.phone, preferred: !!c.preferred }; });
+      call("PUT", "contacts", { contacts: srv.contacts }).then(function (j) { srv.contacts = j.contacts || srv.contacts; })
+        .catch(function (e) { if (e.status === 401) { setSrv(null, []); changed(); } try { window.dispatchEvent(new CustomEvent("lcs:save-error", { detail: e.message })); } catch (x) {} });
+      return true;
+    }
+    return write("lcs_contacts:" + s.username, list);
+  }
+  /* ---------- Báo cáo: mã tra cứu, lịch sử theo tài khoản, kiểm duyệt ----------
+     Máy chủ: lưu trong data/accounts.lcsdb (mã hóa). Trình duyệt: localStorage "lcs_reports".
+     Chỉ lưu bản băm SHA-256 của mã tra cứu, không lưu mã gốc. */
+  var RK = "lcs_reports", ALPHA = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  var STATUS = { PENDING_VERIFICATION: "Chờ xác minh", UNDER_REVIEW: "Đang xác minh", VERIFIED: "Đã xác minh", INSUFFICIENT_EVIDENCE: "Chưa đủ căn cứ", REJECTED: "Bị từ chối" };
+  var CATS = { fake_authority: "Giả danh công an / ngân hàng", fake_job: "Việc nhẹ, lương cao", phishing: "Đường dẫn giả mạo", fake_gift: "Nhận quà / trúng thưởng", investment: "Đầu tư / sinh lời", other: "Hình thức khác" };
+  function rnd(n) { var a = new Uint8Array(n); crypto.getRandomValues(a); var s = ""; for (var i = 0; i < n; i++) s += ALPHA[a[i] % 32]; return s; }
+  function normCode(v) { var c = String(v || "").toUpperCase().replace(/[^A-Z0-9]/g, ""); if (c.indexOf("LCS") === 0) c = c.slice(3); return /^[A-HJ-NP-Z2-9]{12}$/.test(c) ? "LCS-" + c.slice(0, 4) + "-" + c.slice(4, 8) + "-" + c.slice(8) : null; }
+  async function sha(t) { needCrypto(); var b = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t))); var h = ""; for (var i = 0; i < b.length; i++) h += ("0" + b[i].toString(16)).slice(-2); return h; }
+  function rlist() { var a = read(RK, []); return Array.isArray(a) ? a.filter(function (r) { return r && typeof r.id === "string" && STATUS[r.status] && Array.isArray(r.events); }) : []; }
+  function pubR(r) {
+    var last = r.events.slice().reverse().find(function (e) { return e.to_status === r.status; });
+    return { reference: r.reference, status: r.status, category: r.category, indicator_type: r.indicator_type, created_at: r.created_at, updated_at: r.updated_at,
+      reason: r.status === "REJECTED" && last ? last.reason : null, steps: r.events.map(function (e) { return { status: e.to_status, at: e.created_at }; }) };
+  }
+  var reports = Object.freeze({
+    STATUS: STATUS, CATS: CATS, normCode: normCode,
+    submit: async function (p) {
+      await readyP;
+      if (SERVER) return call("POST", "reports", { category: p.category, indicator_type: p.indicator_type, indicator: p.indicator, description: p.description, ward: p.ward });
+      var now = new Date(), iso = now.toISOString(), code = normCode(rnd(12)), list = rlist(), me = session();
+      var dup = list.some(function (x) { return String(x.indicator || "").toLowerCase() === String(p.indicator).toLowerCase(); });
+      var r = { id: "f02-" + Date.now().toString(36) + "-" + rnd(4).toLowerCase(), reference: code, code_hash: await sha(code), owner: me ? me.username : null,
+        category: p.category, indicator_type: p.indicator_type, indicator: p.indicator, description: p.description, ward: p.ward, province: "Đồng Nai", status: "PENDING_VERIFICATION", possible_duplicate: dup, created_at: iso, updated_at: iso, has_evidence: false, events: [] };
+      list.unshift(r);
+      if (!write(RK, list.slice(0, 300))) throw new Error("Trình duyệt đang chặn lưu dữ liệu nên chưa lưu được báo cáo.");
+      return { reference: r.reference, code: code, status: r.status, possible_duplicate: dup, owner: r.owner };
+    },
+    lookup: async function (codeIn) {
+      await readyP;
+      var code = normCode(codeIn); if (!code) throw new Error("Mã tra cứu gồm 12 ký tự sau chữ LCS, ví dụ LCS-AB2C-D3EF-GH4K.");
+      if (SERVER) return (await call("POST", "lookup", { code: code })).report;
+      var h = await sha(code), r = rlist().find(function (x) { return x.code_hash === h; });
+      if (!r) throw new Error("Không tìm thấy báo cáo với mã này trên trình duyệt này. Kiểm tra lại từng ký tự.");
+      return pubR(r);
+    },
+    mine: async function () {
+      await readyP; var me = session(); if (!me) return [];
+      if (SERVER) return (await call("GET", "myreports")).reports;
+      return rlist().filter(function (x) { return x.owner === me.username; }).map(pubR);
+    },
+    reviewList: async function () {
+      await readyP;
+      if (SERVER) return (await call("GET", "review/reports")).reports;
+      return rlist().map(function (r) { var x = Object.assign({}, r); delete x.code_hash; x.has_account = !!x.owner; x.reporter = x.owner ? { username: x.owner, name: (read(KA, {})[x.owner] || {}).name || x.owner } : null; delete x.owner; return x; });
+    },
+    decide: async function (id, b) {
+      await readyP;
+      if (SERVER) return (await call("POST", "review/decision", { id: id, target: b.target, reason: b.reason, evidence_basis: b.evidence_basis, evidence_checked: !!b.evidence_checked, expected_updated_at: b.expected_updated_at })).report;
+      var list = rlist(), r = list.find(function (x) { return x.id === id; }); if (!r) throw new Error("Không tìm thấy hồ sơ.");
+      var t = new Date().toISOString(), me = session();
+      r.events.push({ actor: me ? me.username : "reviewer-demo", from_status: r.status, to_status: b.target, reason: b.reason, evidence_basis: b.evidence_basis || "", created_at: t });
+      r.status = b.target; r.updated_at = t;
+      if (!write(RK, list)) throw new Error("Trình duyệt đang chặn lưu dữ liệu.");
+      var x = Object.assign({}, r); delete x.code_hash; x.has_account = !!x.owner; x.reporter = x.owner ? { username: x.owner, name: (read(KA, {})[x.owner] || {}).name || x.owner } : null; delete x.owner; return x;
+    }
+  });
+  function mode() { return SERVER ? "server" : "local"; }
+  function chip() {
+    var s = session();
+    document.querySelectorAll("[data-lcs-acct]").forEach(function (a) {
+      var t = a.querySelector(".lcs-acct-t");
+      if (t) t.textContent = s ? s.name : "Tài khoản";
+      a.classList.toggle("in", !!s);
+      a.setAttribute("aria-label", s ? "Tài khoản: " + s.name + " (" + (ROLE[s.role] || "") + ")" : "Đăng nhập hoặc tạo tài khoản");
+      a.title = s ? s.name + " · " + (ROLE[s.role] || "") : "Tài khoản: đăng nhập hoặc tạo mới";
+    });
+  }
+  function changed() { chip(); try { window.dispatchEvent(new CustomEvent("lcs:auth", { detail: session() })); } catch (e) {} }
+  window.addEventListener("storage", function (e) { if (!SERVER && (e.key === KS || e.key === KA)) changed(); });
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", chip); else chip();
+  var readyP = SERVER ? probe() : Promise.resolve();
+  window.LCS = Object.freeze({ session: session, login: login, register: register, logout: logout, contacts: contacts, saveContacts: saveContacts, mode: mode, reports: reports, ROLE: ROLE, SEED: SEED, DEMO_PW: DEMO_PW });
+})();
+</script>
+</head>
+<body>
+  <svg aria-hidden="true" focusable="false" class="icon-defs" xmlns="http://www.w3.org/2000/svg">
+  <svg aria-hidden="true" focusable="false" class="icon-defs" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="icon-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/></symbol>
+    <symbol id="icon-flag" viewBox="0 0 24 24"><path d="M4 22V4m0 1c4-3 8 3 12 0 2-1 3-1 4-1v12c-4-2-8 2-12-1-1-.5-3-1-4 0"/></symbol>
+    <symbol id="icon-arrow" viewBox="0 0 24 24"><path d="m5 12 14 0m-6-6 6 6-6 6"/></symbol>
+    <symbol id="icon-left" viewBox="0 0 24 24"><path d="m19 12-14 0m6-6-6 6 6 6"/></symbol>
+    <symbol id="icon-check" viewBox="0 0 24 24"><path d="m5 12 5 5L20 7"/></symbol>
+    <symbol id="icon-check-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></symbol>
+    <symbol id="icon-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7v.2"/></symbol>
+    <symbol id="icon-alert" viewBox="0 0 24 24"><path d="M10.4 4.4 2.2 18.7a2 2 0 0 0 1.8 3h16a2 2 0 0 0 1.8-3L13.6 4.4a1.9 1.9 0 0 0-3.2 0Z"/><path d="M12 9v5m0 3v.2"/></symbol>
+    <symbol id="icon-phone" viewBox="0 0 24 24"><path d="M21 16v3a2 2 0 0 1-2 2C9.6 21 3 14.4 3 5a2 2 0 0 1 2-2h3a2 2 0 0 1 2 1.7l.5 2.6a2 2 0 0 1-.6 1.8L8 11a15 15 0 0 0 5 5l1.9-1.9a2 2 0 0 1 1.8-.6l2.6.5A2 2 0 0 1 21 16Z"/></symbol>
+    <symbol id="icon-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7 .3l2-2a5 5 0 0 0-7-7l-1.1 1.1M14 11a5 5 0 0 0-7-.3l-2 2a5 5 0 0 0 7 7L13 18"/></symbol>
+    <symbol id="icon-card" viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20m-15 5h4"/></symbol>
+    <symbol id="icon-message" viewBox="0 0 24 24"><path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5c-1.5 0-2.9-.4-4.1-1L3 20l1.8-5.1a7.5 7.5 0 1 1 15.2-3.4Z"/></symbol>
+    <symbol id="icon-paperclip" viewBox="0 0 24 24"><path d="m21 11.5-9.6 9.6a6 6 0 0 1-8.5-8.5l9.6-9.6a4 4 0 0 1 5.7 5.7L8.6 18.3a2 2 0 0 1-2.8-2.8l8.5-8.5"/></symbol>
+    <symbol id="icon-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></symbol>
+    <symbol id="icon-lock" viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></symbol>
+    <symbol id="icon-eye" viewBox="0 0 24 24"><path d="M2 12s4-6 10-6 10 6 10 6-4 6-10 6-10-6-10-6Z"/><circle cx="12" cy="12" r="2.5"/></symbol>
+    <symbol id="icon-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="icon-home" viewBox="0 0 24 24"><path d="m3 11 9-8 9 8v10H3V11Zm6 10v-7h6v7"/></symbol>
+    <symbol id="icon-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14.4-4.8L3 9m0-6v6h6M4 13a8 8 0 0 0 14.4 4.8L21 15m0 6v-6h-6"/></symbol>
+    <symbol id="icon-close" viewBox="0 0 24 24"><path d="M5 5l14 14M19 5 5 19"/></symbol>
+    <symbol id="icon-chevron" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+    <symbol id="icon-heart" viewBox="0 0 24 24"><path d="M20 5a5 5 0 0 0-7 0l-1 1-1-1a5 5 0 0 0-7 7l8 8 8-8a5 5 0 0 0 0-7Z"/></symbol>
+  </svg>
+    <symbol id="icon-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
+    <symbol id="icon-book" viewBox="0 0 24 24"><path d="M4 19.5V5a2 2 0 0 1 2-2h14v16H6a2 2 0 0 0-2 2Zm0 0A2 2 0 0 0 6 22h14"/></symbol>
+    <symbol id="icon-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.6a3.5 3.5 0 0 1 0 6.8M18 14c2.2.7 3.5 2.8 3.5 6"/></symbol>
+    <symbol id="icon-wifi-off" viewBox="0 0 24 24"><path d="m3 3 18 18M8.5 16.5a5 5 0 0 1 7 0M5 13a10 10 0 0 1 5.2-2.8M19 13a10 10 0 0 0-2.4-1.7M2 9a15 15 0 0 1 4.2-2.7M22 9a15 15 0 0 0-11-3.9M12 20h.01"/></symbol>
+
+  </svg>
+  <div class="site-shell">
+    <!-- LCS-HEADER:START (giống hệt nhau ở mọi trang, chỉ khác mục đang chọn) -->
+<div class="lcs-hdr" role="banner"><div class="lcs-hdr-in">
+  <a href="index.html" class="lcs-logo" aria-label="Lá Chắn Số - về trang chủ"><span class="lcs-mark"><svg class="lcs-emblem" viewBox="0 0 200 104" aria-hidden="true" focusable="false"><rect x="3" y="3" width="194" height="42" fill="#003d82" stroke="#fff" stroke-width="5"/><text x="100" y="31" text-anchor="middle" font-family="Be Vietnam Pro,Arial,sans-serif" font-weight="800" font-size="17" fill="#fff" textLength="172" lengthAdjust="spacingAndGlyphs">THANH NIÊN VIỆT NAM</text><path d="M24 50H176L100 101Z" fill="#e5373a" stroke="#fff" stroke-width="5" stroke-linejoin="miter"/><path d="M100 56l4.4 9.6 10.4 1.2-7.7 7.1 2.1 10.3L100 78.8l-9.2 4.4 2.1-10.3-7.7-7.1 10.4-1.2Z" fill="#fad550"/></svg></span><span class="lcs-brand">LÁ CHẮN <span>SỐ</span><small>Vì một cộng đồng an toàn</small></span></a>
+  <nav class="lcs-nav" aria-label="Chức năng"><a href="index.html">Trang chủ</a><a href="quick-check.html">Kiểm tra</a><a href="message-check.html">Tin nhắn</a><a href="learn.html">Học 1 phút</a><a href="quiz.html">Quiz</a><a href="ask-family.html">Người thân</a><a href="report.html">Báo cáo</a></nav>
+  <span class="lcs-right"><a class="lcs-home" href="index.html" aria-label="Trang chủ"><svg class="lcs-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 11 9-8 9 8v10H3V11Zm6 10v-7h6v7"/></svg>Trang chủ</a><a class="lcs-acct" href="account.html" data-lcs-acct aria-current="page"><svg class="lcs-ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg><span class="lcs-acct-t">Tài khoản</span></a><span data-lcs-fs></span></span>
+</div></div>
+<!-- LCS-HEADER:END -->
+    <main class="acct-wrap" id="main">
+      <div class="acct-card"><span class="acct-eyebrow">Tài khoản</span><div id="acct-root" aria-live="polite"></div></div>
+      <div class="notice-local"><svg class="ic" aria-hidden="true"><use href="#icon-info"></use></svg><span id="store-note"><strong>Bản demo.</strong> Tài khoản chỉ lưu trong trình duyệt này, mật khẩu được băm (PBKDF2) trước khi lưu và không gửi đi đâu. Không dùng mật khẩu thật bạn đang dùng ở nơi khác.</span></div>
+    </main>
+  </div>
+<script>
+var ICON=function(n){return '<svg class="ic" aria-hidden="true"><use href="#icon-'+n+'"></use></svg>'};
+var esc=function(v){return String(v==null?"":v).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]})};
+(function(){
+  var root=document.getElementById("acct-root");
+  var FILE={"F00": "index.html", "F01": "quick-check.html", "F02": "report.html", "F03": "ask-family.html", "F04": "learn.html", "F05": "quiz.html", "F06": "volunteer-dashboard.html", "F07": "message-check.html", "F08": "check-result.html", "F09": "trusted-contacts.html", "F12": "moderation.html", "F13": "account.html"};
+  var NEXT={F00:1,F01:1,F02:1,F03:1,F04:1,F05:1,F06:1,F07:1,F08:1,F09:1,F12:1};
+  var NAMES={F00:"Trang chủ",F02:"Báo cáo",F03:"Hỏi người thân",F06:"Đội tình nguyện",F09:"Người thân tin cậy",F12:"Trung tâm kiểm duyệt"};
+  var next=(new URLSearchParams(location.search).get("next")||"").toUpperCase(); if(!NEXT[next]) next="";
+  var tab=new URLSearchParams(location.search).get("tab")==="register"?"register":"login", busy=false, err="", fields={}, keep={};
+  function go(code){location.href=FILE[code]}
+  function field(id,label,type,ac,hint,extra){var e=fields[id];return '<div class="field"><label for="'+id+'">'+label+'</label><input class="input" id="'+id+'" name="'+id+'" type="'+type+'" autocomplete="'+ac+'" value="'+(type==="password"?"":esc(keep[id]||""))+'"'+(e?' aria-invalid="true" aria-describedby="'+id+'-e"':'')+(extra||"")+'/>'+(e?'<span class="err" id="'+id+'-e">'+esc(e)+'</span>':hint?'<span class="hint">'+hint+'</span>':'')+'</div>'}
+  function guest(){
+    var L=tab==="login";
+    return '<h1>'+(L?"Đăng nhập":"Tạo tài khoản người dân")+'</h1><p class="lead">'+(next?'Đăng nhập để tiếp tục đến <strong>'+esc(NAMES[next]||next)+'</strong>.':L?"Đăng nhập để dùng danh sách người thân của bạn. Cán bộ Đoàn đăng nhập để vào trang kiểm duyệt.":"Miễn phí, chỉ cần tên hiển thị và mật khẩu. Không cần số điện thoại hay căn cước.")+'</p>'+
+    '<div class="tabs" role="tablist" aria-label="Chọn cách"><button type="button" role="tab" id="tab-login" aria-selected="'+L+'" data-tab="login">Đăng nhập</button><button type="button" role="tab" id="tab-register" aria-selected="'+!L+'" data-tab="register">Tạo tài khoản</button></div>'+
+    (L?'<form class="acct-form" id="f-login" novalidate>'+field("username","Tên đăng nhập","text","username","",' autocapitalize="none" spellcheck="false" maxlength="30"')+field("password","Mật khẩu","password","current-password","",' maxlength="100"')+
+      '<label class="show-pw"><input type="checkbox" id="showpw"/> Hiện mật khẩu</label>'+(err?'<div class="form-alert" role="alert">'+esc(err)+'</div>':'')+
+      '<button class="btn btn-primary" type="submit" '+(busy?"disabled":"")+'>'+(busy?"Đang kiểm tra…":ICON("lock")+" Đăng nhập")+'</button></form>'+
+      '<div class="guest-lookup"><span class="gl-q">Không muốn tạo tài khoản?</span><span class="gl-links"><a href="report.html">'+ICON("flag")+' Gửi báo cáo ẩn danh</a><span class="gl-sep" aria-hidden="true"></span><a href="report.html?tra_cuu=1">'+ICON("search")+' Tra cứu bằng mã</a></span></div><details class="demo-box"><summary>Tài khoản cán bộ Đoàn dùng thử (demo)</summary><p style="margin:8px 0 0">Tài khoản cán bộ do Đoàn cấp, người dân không tự tạo được. Bản demo có sẵn 2 tài khoản, mật khẩu chung <code>'+esc(LCS.DEMO_PW)+'</code>:</p><ul><li><code>canbo.demo</code>: Cán bộ kiểm duyệt, vào trang Kiểm duyệt</li><li><code>tinhnguyen.demo</code>: Đội tình nguyện, vào trang Đội tình nguyện</li></ul><div class="demo-fill"><button type="button" data-fill="canbo.demo">Điền tài khoản kiểm duyệt</button><button type="button" data-fill="tinhnguyen.demo">Điền tài khoản tình nguyện</button></div></details>'
+    :'<form class="acct-form" id="f-register" novalidate>'+field("name","Tên hiển thị","text","nickname","Tên người thân và cán bộ nhìn thấy, ví dụ: Cô Lan.",' maxlength="50"')+field("username","Tên đăng nhập","text","username","4–30 ký tự: chữ không dấu, số, dấu chấm hoặc gạch dưới.",' autocapitalize="none" spellcheck="false" maxlength="30"')+field("password","Mật khẩu","password","new-password","Tối thiểu 8 ký tự, có cả chữ và số. Không dùng lại mật khẩu ngân hàng.",' maxlength="100"')+field("confirm","Nhập lại mật khẩu","password","new-password","",' maxlength="100"')+
+      '<label class="show-pw"><input type="checkbox" id="showpw"/> Hiện mật khẩu</label>'+(err?'<div class="form-alert" role="alert">'+esc(err)+'</div>':'')+
+      '<button class="btn btn-primary" type="submit" '+(busy?"disabled":"")+'>'+(busy?"Đang tạo…":ICON("check-circle")+" Tạo tài khoản")+'</button><p class="hint" style="margin:0;font-size:13px;color:#5d667c">Tài khoản tạo ở đây là tài khoản người dân. Tài khoản cán bộ kiểm duyệt và đội tình nguyện do Đoàn cấp.</p></form>');
+  }
+  function card(code,icon,title,sub,go){return '<a class="feature" href="'+FILE[code]+'"><span class="f-icon">'+ICON(icon)+'</span><strong>'+title+'</strong><small>'+sub+'</small><span class="go">'+go+' '+ICON("arrow")+'</span></a>'}
+  function profile(a){
+    var cards=a.role==="citizen"?card("F09","users","Người thân tin cậy","Thêm, sửa số người thân để gọi nhanh khi cần.","Thiết lập")+card("F03","phone","Hỏi người thân","Gọi hoặc nhắn tin cho người thân trước khi làm theo yêu cầu lạ.","Mở")
+      :a.role==="reviewer"?card("F12","eye","Trung tâm kiểm duyệt","Tiếp nhận báo cáo người dân gửi, xác minh và cập nhật trạng thái.","Vào trang")+card("F06","heart","Đội tình nguyện","Thống kê đã xác minh để chọn nội dung tuyên truyền.","Vào trang")
+      :card("F06","heart","Đội tình nguyện","Thống kê đã xác minh theo khu vực, gợi ý nội dung tuyên truyền.","Vào trang")+card("F12","eye","Thống kê kiểm duyệt","Vai trò tình nguyện chỉ xem số liệu đủ ngưỡng, không xem hồ sơ gốc.","Vào trang");
+    return '<h1>Xin chào, '+esc(a.name)+'</h1><div class="profile"><span class="av" aria-hidden="true">'+esc(a.name.trim().charAt(0).toUpperCase())+'</span><div><strong>'+esc(a.name)+'</strong><span class="role-pill'+(a.staff?" staff":"")+'">'+esc(a.roleLabel)+'</span> <small style="color:#5d667c">@'+esc(a.username)+'</small></div></div>'+
+      (next?'<div class="form-ok" role="status">Bạn đã đăng nhập. <a href="'+FILE[next]+'" style="color:#0c6639">Tiếp tục đến '+esc(NAMES[next]||next)+' →</a></div>':'')+
+      (a.staff?'':'<section class="my-reports first" id="bao-cao" aria-labelledby="mr-h"><div class="mr-head"><h2 id="mr-h">Báo cáo của tôi</h2><span class="mr-acts"><a class="btn btn-secondary" href="report.html?tra_cuu=1">'+ICON("search")+' Tra cứu bằng mã</a><a class="btn btn-secondary" href="report.html">'+ICON("flag")+' Gửi báo cáo mới</a></span></div><div id="mr-list" aria-live="polite"><p class="hint">Đang tải lịch sử báo cáo…</p></div></section>')+'<div class="feature-grid two">'+cards+'</div>'+'<div class="acct-actions"><button type="button" class="btn btn-secondary" id="logout">'+ICON("close")+' Đăng xuất</button><a class="btn btn-secondary" href="index.html">'+ICON("home")+' Về trang chủ</a></div>';
+  }
+  function note(){var n=document.getElementById("store-note");if(n)n.innerHTML=LCS.mode()==="server"?"<strong>Đang dùng máy chủ Lá Chắn Số.</strong> Tài khoản và người thân được lưu vào file <code>data/accounts.lcsdb</code> đã mã hóa AES-256; mật khẩu được băm (scrypt), không lưu nguyên văn. Không dùng mật khẩu thật bạn đang dùng ở nơi khác.":"<strong>Bản demo, đang mở trực tiếp file HTML.</strong> Trình duyệt không cho ghi file ra ổ đĩa nên tài khoản tạm lưu trong trình duyệt này (mật khẩu đã băm PBKDF2). Muốn lưu vào file mã hóa, chạy <code>node server.js</code> rồi mở http://localhost:8686. Không dùng mật khẩu thật bạn đang dùng ở nơi khác."}
+  function when(v){var d=new Date(v);return isNaN(+d)?"":d.toLocaleString("vi-VN",{dateStyle:"short",timeStyle:"short"})}
+  var mrSeq=0;
+  function loadMine(){var box=document.getElementById("mr-list");if(!box)return;var seq=++mrSeq;var R=LCS.reports;
+    R.mine().then(function(list){if(seq!==mrSeq)return;
+      box.innerHTML=list.length?'<ul class="mr-list">'+list.map(function(r){return '<li class="mr-item st-'+esc(r.status)+'"><div class="mr-top"><strong>'+esc(R.CATS[r.category]||"Báo cáo")+'</strong><span class="mr-pill">'+esc(R.STATUS[r.status]||r.status)+'</span></div><small>Mã '+esc(r.reference)+' · gửi '+when(r.created_at)+(r.updated_at!==r.created_at?' · cập nhật '+when(r.updated_at):'')+'</small>'+(r.reason?'<div class="mr-reason"><strong>Lý do từ chối:</strong> '+esc(r.reason)+'</div>':'')+'</li>'}).join("")+'</ul>'
+        :'<div class="empty-c"><strong>Chưa có báo cáo nào</strong>Báo cáo bạn gửi khi đang đăng nhập sẽ được lưu ở đây, xem trạng thái không cần nhập mã.</div>';
+      if(location.hash==="#bao-cao"){var h=document.getElementById("bao-cao");if(h)h.scrollIntoView({block:"start"})}
+    }).catch(function(e){if(seq===mrSeq)box.innerHTML='<div class="form-alert" role="alert">Chưa tải được lịch sử báo cáo: '+esc(e.message)+'</div>'})}
+  function render(focus){note();var a=LCS.session();root.innerHTML=a?profile(a):guest();bind();if(a)loadMine();if(focus){var t=root.querySelector(focus);if(t)t.focus()}}
+  function bind(){
+    root.querySelectorAll("[data-tab]").forEach(function(b){b.onclick=function(){tab=b.dataset.tab;err="";fields={};render("#tab-"+tab)}});
+    var sp=document.getElementById("showpw");if(sp)sp.onchange=function(){root.querySelectorAll('input[type="password"],input[data-pw]').forEach(function(i){i.type=sp.checked?"text":"password";i.setAttribute("data-pw","1")})};
+    root.querySelectorAll("[data-fill]").forEach(function(b){b.onclick=function(){document.getElementById("username").value=b.dataset.fill;var p=document.getElementById("password");p.value=LCS.DEMO_PW;p.focus()}});
+    var lo=document.getElementById("logout");if(lo)lo.onclick=function(){LCS.logout();tab="login";render("h1")};
+    var fl=document.getElementById("f-login");if(fl)fl.onsubmit=function(e){e.preventDefault();if(busy)return;var u=fl.username.value,p=fl.password.value;keep={username:u};fields={};
+      if(!u.trim())fields.username="Nhập tên đăng nhập.";if(!p)fields.password="Nhập mật khẩu.";if(fields.username||fields.password){err="";render(fields.username?"#username":"#password");return}
+      busy=true;err="";render();LCS.login(u,p).then(function(){busy=false;if(next)go(next);else render("h1")}).catch(function(x){busy=false;err=x.message;render("#password")})};
+    var fr=document.getElementById("f-register");if(fr)fr.onsubmit=function(e){e.preventDefault();if(busy)return;var o={name:document.getElementById("name").value,username:fr.username.value,password:fr.password.value,confirm:fr.confirm.value};keep={name:o.name,username:o.username};
+      busy=true;err="";fields={};render();LCS.register(o).then(function(){busy=false;if(next)go(next);else render("h1")}).catch(function(x){busy=false;fields=x.fields||{};err=x.fields?"":x.message;var f=["name","username","password","confirm"].filter(function(k){return fields[k]})[0];render(f?"#"+f:"button[type=submit]")})};
+  }
+  window.addEventListener("lcs:auth",function(){if(!busy)render()});
+  render();
+})();
+</script>
+<!-- LCS cỡ chữ: nút A− / A+ đồng bộ giữa các trang qua localStorage "lcs_font_scale" -->
+<link rel="stylesheet" href="css/font-size.css">
+<script>
+(function () {
+  var s = window.__lcsFont || { L: [0.9, 1, 1.15, 1.3], i: 1 };
+  var hosts = document.querySelectorAll("[data-lcs-fs]");
+  var outs = [], decs = [], incs = [];
+  hosts.forEach(function (host) {
+    host.innerHTML = '<div class="lcs-fs" role="group" aria-label="Cỡ chữ">' +
+      '<button type="button" data-d="-1" aria-label="Giảm cỡ chữ" title="Giảm cỡ chữ"><span class="lcs-fs-small">A</span>−</button>' +
+      '<output aria-live="polite"></output>' +
+      '<button type="button" data-d="1" aria-label="Tăng cỡ chữ" title="Tăng cỡ chữ">A+</button></div>';
+    outs.push(host.querySelector("output"));
+    decs.push(host.querySelector('[data-d="-1"]'));
+    incs.push(host.querySelector('[data-d="1"]'));
+    host.addEventListener("click", function (e) {
+      var b = e.target.closest("button[data-d]");
+      if (b) set(s.i + Number(b.dataset.d), true);
+    });
+  });
+  function layout() {
+    var w = window.innerWidth / s.L[s.i];
+    document.documentElement.classList.toggle("lcs-compact", w < 1140 && window.innerWidth >= 851);
+    document.documentElement.classList.toggle("lcs-narrow", w < 560);
+  }
+  function set(i, save) {
+    i = Math.max(0, Math.min(s.L.length - 1, i));
+    s.i = i;
+    document.documentElement.style.zoom = s.L[i];
+    outs.forEach(function (o) { o.textContent = Math.round(s.L[i] * 100) + "%"; });
+    decs.forEach(function (b) { b.disabled = i === 0; });
+    incs.forEach(function (b) { b.disabled = i === s.L.length - 1; });
+    if (save) { try { localStorage.setItem("lcs_font_scale", String(s.L[i])); } catch (e) {} }
+    layout();
+  }
+  // Đồng bộ ngay với các tab khác đang mở
+  window.addEventListener("storage", function (e) {
+    if (e.key === "lcs_font_scale") { var k = s.L.indexOf(parseFloat(e.newValue)); set(k >= 0 ? k : 1, false); }
+  });
+  window.addEventListener("resize", layout);
+  set(s.i, false);
+})();
+</script>
+</body>
+</html>
