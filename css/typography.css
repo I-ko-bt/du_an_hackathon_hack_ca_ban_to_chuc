@@ -1,0 +1,6 @@
+/* Lá Chắn Số · file CSS dùng chung. Màu lấy từ css/theme.css */
+/* Nhận diện Đoàn (skill doan-nhan-dien-ui): tiêu đề Bai Jamjuree, nội dung Be Vietnam Pro, vàng sao trên nền xanh */
+h1,h2,h3,.screen-title,.brand-text,.brand,.section-title,.verdict h2,.score .value{font-family:"Bai Jamjuree","Be Vietnam Pro",system-ui,sans-serif}
+.intro-panel h1{letter-spacing:-.5px}.screen-title{letter-spacing:-.3px}
+.intro-panel h1 em{color:var(--lcs-yellow)}
+@media(max-width:850px){.intro-panel{position:relative;top:auto}}

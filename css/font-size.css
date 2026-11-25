@@ -1,0 +1,34 @@
+/* Lá Chắn Số · file CSS dùng chung. Màu lấy từ css/theme.css */
+html{background:var(--lcs-bg)}body{min-height:0!important}
+.lcs-fs{display:inline-flex;align-items:center;gap:2px;border:1px solid var(--lcs-line);background:var(--lcs-white);border-radius:999px;padding:3px;flex-shrink:0}
+.lcs-fs button{appearance:none;border:0;background:transparent;box-shadow:none;cursor:pointer;min-width:44px;min-height:44px;height:44px;padding:0 6px;border-radius:999px;display:inline-grid;place-items:center;font:inherit;font-weight:800;font-size:16px;line-height:1;color:var(--lcs-blue-dark)}
+.lcs-fs button:hover:not(:disabled){background:var(--lcs-blue-soft)}
+.lcs-fs button:focus-visible{outline:3px solid var(--lcs-focus);outline-offset:2px}
+.lcs-fs button:disabled{opacity:.35;cursor:not-allowed}
+.lcs-fs .lcs-fs-small{font-size:13px}
+.lcs-fs output{min-width:46px;text-align:center;font-size:13px;font-weight:700;color:var(--lcs-text-2)}
+.lcs-fs button{white-space:nowrap;display:inline-flex;align-items:center;justify-content:center;gap:1px}
+html.lcs-narrow .lcs-fs output{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}
+html.lcs-narrow .lcs-fs button{min-width:40px}
+html.lcs-narrow .brand-text small{display:none}
+html.lcs-narrow .header-inner{gap:8px;flex-wrap:wrap;padding-top:8px;padding-bottom:8px}
+/* Khi chữ to làm bề ngang thực tế hẹp lại: chuyển bố cục về dạng 1 cột */
+html.lcs-compact .main-layout{display:block;max-width:760px}
+html.lcs-compact .intro-panel{position:relative;top:auto;min-height:auto;margin-bottom:16px}
+html.lcs-compact .intro-illustration,html.lcs-compact .process-rail{display:none}
+html.lcs-compact .nav-links{display:none}
+html.lcs-narrow .header-tag{display:none}
+html.lcs-narrow .field-row{grid-template-columns:1fr;gap:0}
+html.lcs-narrow .choice-grid,html.lcs-narrow .choice-grid.four{grid-template-columns:repeat(2,minmax(0,1fr))}
+html.lcs-narrow .action-row{flex-direction:column-reverse}
+html.lcs-narrow .action-row .btn{width:100%;flex:auto}
+html.lcs-narrow .action-grid{grid-template-columns:1fr}
+html.lcs-narrow .header-inner{padding:0 12px}
+@media(max-width:520px){.header-tag{display:none}}
+
+/* nút cỡ chữ trên nền Princess Blue */
+.lcs-hdr .lcs-fs,.lcs-fs{border-color:color-mix(in srgb,var(--lcs-yellow) 40%,transparent);background:transparent}
+.lcs-fs button{color:var(--lcs-yellow)}
+.lcs-fs button:hover:not(:disabled){background:color-mix(in srgb,var(--lcs-yellow) 14.9%,transparent)}
+.lcs-fs button:focus-visible{outline:3px solid var(--lcs-white)}
+.lcs-fs output{color:var(--lcs-yellow)}
